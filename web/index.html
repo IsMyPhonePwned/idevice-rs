@@ -3,185 +3,414 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>idevice-rs (WebUSB + host CLI)</title>
+  <title>idevice-rs (WASM + WebUSB)</title>
   <style>
     :root {
-      font-family: system-ui, sans-serif;
-      line-height: 1.45;
-      color: #e8e8ec;
-      background: #12141a;
+      --bg: #0c0e12;
+      --card: #141820;
+      --line: #2a3044;
+      --text: #e8eaf0;
+      --muted: #8b93a8;
+      --accent: #34d399;
+      --font: system-ui, sans-serif;
+      --mono: ui-monospace, monospace;
     }
-    body { margin: 0 auto; max-width: 52rem; padding: 1.25rem; }
-    h1 { font-size: 1.25rem; font-weight: 600; }
-    h2 { font-size: 1rem; margin-top: 1.5rem; color: #aab; }
-    section { margin-bottom: 1.25rem; }
-    button, select, input {
-      font: inherit;
-      padding: 0.4rem 0.65rem;
-      border-radius: 6px;
-      border: 1px solid #334;
-      background: #1e2230;
-      color: inherit;
-    }
-    button { cursor: pointer; }
-    button:hover { background: #2a3040; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    pre {
-      background: #0c0e14;
-      border: 1px solid #2a3040;
-      border-radius: 8px;
-      padding: 0.75rem;
-      overflow: auto;
-      max-height: 18rem;
-      font-size: 0.82rem;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.35rem 0; }
-    label { color: #aab; font-size: 0.9rem; }
-    .hint { font-size: 0.85rem; color: #889; margin-top: 0.35rem; }
-    a { color: #8bf; }
+    body { margin: 0; font-family: var(--font); color: var(--text); background: var(--bg); padding: 1.25rem; line-height: 1.45; }
+    main { max-width: 28rem; margin: 0 auto; }
+    h1 { font-size: 1.2rem; margin: 0 0 0.5rem; }
+    p.sub { color: var(--muted); font-size: 0.86rem; margin: 0 0 1rem; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.85rem; }
+    h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 0.5rem; }
+    label { font-size: 0.88rem; cursor: pointer; display: block; margin: 0.25rem 0; }
+    input[type="text"] { width: 100%; max-width: 22rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); background: #0a0c10; color: var(--text); font: inherit; }
+    .row { margin: 0.35rem 0; }
+    .btn { font: inherit; font-weight: 600; font-size: 0.82rem; padding: 0.4rem 0.7rem; margin: 0.2rem 0.35rem 0.2rem 0; border-radius: 8px; border: 1px solid var(--line); background: #1a1f2c; color: var(--text); cursor: pointer; }
+    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-primary { background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.4); color: var(--accent); }
+    pre#out { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: #07080c; border: 1px solid var(--line); font-family: var(--mono); font-size: 0.74rem; white-space: pre-wrap; word-break: break-word; max-height: 24rem; overflow: auto; color: #c4c8d4; }
+    input[type="checkbox"] { accent-color: var(--accent); }
+    input[type="file"] { font-size: 0.82rem; color: var(--muted); max-width: 100%; margin: 0.25rem 0 0.35rem; }
+    .plist-hint { font-size: 0.78rem; color: var(--muted); margin: 0.15rem 0 0.35rem; }
+    details.toggle-block { margin: 0 0 0.75rem; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.65rem; background: #0e1016; }
+    details.toggle-block > summary { cursor: pointer; font-size: 0.82rem; color: var(--muted); user-select: none; list-style-position: outside; }
+    details.toggle-block[open] > summary { margin-bottom: 0.4rem; color: var(--text); }
+    details.toggle-block .sub { margin-top: 0.35rem; }
   </style>
 </head>
 <body>
-  <h1>idevice-rs</h1>
-  <p>
-    WebUSB (Chromium) can open the Apple mux pipe and complete a pseudo-TCP handshake to lockdownd.
-    Pairing, TLS, battery, diagnostics, and crash reports run on the host via the
-    <code>idevice</code> CLI through <code>POST /api/cli</code> (inline Python in <code>scripts/serve.sh</code>).
-    From a terminal use <code>cargo run -p idevice-cli -- …</code> (see <code>README.md</code>).
-  </p>
+  <main>
+    <h1>idevice-rs</h1>
+    <details class="toggle-block">
+      <summary>Overview — WASM, TLS, Linux</summary>
+      <p class="sub">
+        All actions run in <strong>WASM + WebUSB</strong>. Pairing supplies <code>HostID</code> / <code>SystemBUID</code> for
+        cleartext <code>StartSession</code>. When the device returns <code>EnableSessionSSL</code>, this build runs
+        <strong>lockdown TLS</strong> (<strong>rustls</strong>) if you loaded a <strong>full XML pair-record plist</strong> that includes the PEM fields
+        (<code>HostPrivateKey</code>, <code>HostCertificate</code>, <code>RootCertificate</code>, <code>RootPrivateKey</code>) — same idea as the native <code>idevice</code> crate.
+        Use <strong>TLS client cert</strong> below: <code>host</code> matches pymobiledevice3; try <code>root</code> for libimobiledevice-shaped records.
+        <strong>Verbose</strong> logs mux / pseudo-TCP to the console (and TLS-related steps as <code>[wasm-tls]</code>).
+      </p>
+      <p class="sub">
+        <strong>Linux + WebUSB:</strong> if <code>selectConfiguration</code> / claim fails while a native stack still talks to the phone,
+        the host may be using <strong>usbmuxd</strong> while Chromium needs exclusive USB access — stop <code>usbmuxd</code> briefly
+        (see errors below) and retry, or use a native client.
+      </p>
+    </details>
 
-  <section>
-    <h2>WebUSB</h2>
-    <div class="row">
-      <button type="button" id="btn-pick">Request Apple device</button>
-      <button type="button" id="btn-mux" disabled>Mux + lockdownd TCP handshake</button>
-    </div>
-    <p class="hint">Requires a secure context (HTTPS or localhost) and a user gesture. On Linux you may need to stop <code>usbmuxd</code> so the browser can claim the interface.</p>
-    <pre id="out-webusb">(no WebUSB output yet)</pre>
-  </section>
+    <section>
+      <h2>Verbose (console)</h2>
+      <details class="toggle-block">
+        <summary>What “verbose” logs</summary>
+        <p class="plist-hint" style="margin:0">When checked, mux framing and pseudo-TCP traffic are printed to the browser <code>console</code> (<code>[idevice-wasm]</code>) — not TLS record hex.</p>
+      </details>
+      <label><input type="checkbox" id="verbose" /> Log mux / pseudo-TCP to <code>console</code></label>
+    </section>
 
-  <section>
-    <h2>Host CLI (USB on this machine)</h2>
-    <div class="row">
-      <label for="cmd">Command</label>
-      <select id="cmd">
-        <option value="list">list</option>
-        <option value="connect">connect</option>
-        <option value="mux">mux</option>
-        <option value="pair">pair</option>
-        <option value="battery">battery</option>
-        <option value="run">run</option>
-        <option value="diagnostics">diagnostics</option>
-        <option value="crash-reports">crash-reports</option>
-      </select>
-    </div>
-    <div class="row">
-      <label for="extra">Extra args</label>
-      <input id="extra" type="text" style="flex:1;min-width:12rem" placeholder='e.g. --pair-record /var/lib/lockdown/XXXX.plist' />
-    </div>
-    <div class="row">
-      <button type="button" id="btn-cli">Run via server</button>
-    </div>
-    <p class="hint">For <code>crash-reports</code>, set extra args to the host output directory first (e.g. <code>./crashes</code>). Omit <code>--no-keep</code> to leave logs on the device after copy; pass <code>--no-keep</code> to remove them (move).</p>
-    <pre id="out-cli">(no CLI output yet)</pre>
-  </section>
+    <section>
+      <h2>Pairing mode</h2>
+      <label><input type="radio" name="pair" value="random" checked /> Random HostID / SystemBUID</label>
+      <label><input type="radio" name="pair" value="legacy" /> Legacy (fixed HostID / SystemBUID)</label>
+      <label><input type="radio" name="pair" value="plist" /> From plist — choose file on disk</label>
+      <div class="row">
+        <label for="plist-file">Pair-record plist (XML)</label>
+        <input type="file" id="plist-file" accept=".plist,.xml,application/xml,text/xml" />
+        <p class="plist-hint" id="plist-status">Binary plists are not read here; use an XML plist or type the keys below.</p>
+      </div>
+      <div class="row"><label for="hostid">HostID</label><input type="text" id="hostid" placeholder="Filled from plist or paste" autocomplete="off" /></div>
+      <div class="row"><label for="buid">SystemBUID</label><input type="text" id="buid" placeholder="Filled from plist or paste" autocomplete="off" /></div>
+    </section>
+
+    <section id="usb-section">
+      <h2 id="usb-section-h2">USB — mux vs QueryType</h2>
+      <p id="usb-pairing-context" class="plist-hint" hidden></p>
+      <details id="usb-mux-help" class="toggle-block">
+        <summary>Mux vs QueryType — full text (technical)</summary>
+        <p class="plist-hint">
+          After <strong>Request Apple device</strong>, both actions configure the Apple bulk interface, run the USB
+          <strong>mux</strong> protocol (<code>VERSION</code>, optional <code>SETUP</code> on mux v2), then open a
+          <strong>pseudo-TCP</strong> stream to <strong>lockdownd</strong> on port <code>62078</code> — same framing as
+          <code>idevice mux</code> on the CLI, but in the browser.
+        </p>
+        <p class="plist-hint">
+          <strong>Mux handshake</strong> stops once that tunnel is up: it does <em>not</em> send a lockdown plist. Use it to
+          confirm WebUSB + mux + TCP to lockdownd work (output shows mux version + “cleartext path ready”).
+        </p>
+        <p class="plist-hint">
+          <strong>QueryType</strong> does the same USB/mux/TCP setup, then sends lockdownd’s first cleartext request
+          (<code>QueryType</code>) and shows the returned <strong>XML</strong>. That proves lockdownd responds before you use
+          pairing / <code>StartSession</code> / battery below.
+        </p>
+      </details>
+      <button type="button" class="btn btn-primary" id="btn-pick">Request Apple device</button>
+      <button type="button" class="btn" id="btn-mux" title="USB mux VERSION (+ SETUP if v2) + pseudo-TCP to lockdownd:62078 only">Mux handshake (no lockdown plist)</button>
+      <button type="button" class="btn" id="btn-qt" title="Same as mux handshake, then lockdown QueryType request/response">QueryType (mux + first lockdown request)</button>
+    </section>
+
+    <section>
+      <h2>Info (lockdown + optional TLS)</h2>
+      <div class="row">
+        <label for="tls-client-auth">TLS client cert (after EnableSessionSSL)</label>
+        <select id="tls-client-auth" style="width:100%;max-width:22rem;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid var(--line);background:#0a0c10;color:var(--text);font:inherit">
+          <option value="host" selected>host — host leaf + host key (default)</option>
+          <option value="root">root — root cert + root key (libimobiledevice)</option>
+          <option value="chain">chain — host + root in chain</option>
+        </select>
+        <p class="plist-hint">If TLS fails or the device rejects the client cert, try another mode.</p>
+      </div>
+      <div class="row">
+        <label for="tls-sni">TLS SNI</label>
+        <select id="tls-sni" style="width:100%;max-width:22rem;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid var(--line);background:#0a0c10;color:var(--text);font:inherit">
+          <option value="device" selected>Device</option>
+          <option value="none">none (IP placeholder, no SNI)</option>
+        </select>
+      </div>
+      <details class="toggle-block">
+        <summary>Fetch with plist — what it does</summary>
+        <p class="plist-hint">Load a <strong>full</strong> XML pair-record plist (including PEM keys), then <strong>Fetch with plist</strong> runs QueryType → StartSession → rustls (if needed) → GetValue. Battery/Diagnostics pass the same loaded plist text for TLS when SSL is required.</p>
+      </details>
+      <button type="button" class="btn btn-primary" id="btn-plist-fetch">Fetch with pair-record plist</button>
+      <button type="button" class="btn" id="btn-bat">Battery</button>
+      <button type="button" class="btn" id="btn-diag">Diagnostics</button>
+      <label class="row"><input type="checkbox" id="crash-keep" checked /> Keep crash logs on device after copy (like <code>idevicecrashreport -k</code>)</label>
+      <button type="button" class="btn" id="btn-crash" title="crashreportmover + AFC; needs full pair-record plist">Crash reports (copy to browser)</button>
+      <p class="plist-hint">Returns an array of <code>{ name, data }</code> (Uint8Array per file). Cap ~32&nbsp;MiB total.</p>
+    </section>
+
+    <pre id="out">Loading WASM…</pre>
+  </main>
 
   <script type="module">
-    const outWeb = document.getElementById("out-webusb");
-    const outCli = document.getElementById("out-cli");
-    const btnPick = document.getElementById("btn-pick");
+    import init, {
+      requestAppleDevice,
+      muxLockdownHandshake,
+      lockdownQueryType,
+      lockdownFetchWithPlistXml,
+      lockdownBattery,
+      lockdownDiagnostics,
+      lockdownCrashReports,
+      lockdownCrashReportsInfo,
+    } from "./pkg/idevice_wasm.js";
+
+    const out = document.getElementById("out");
+    const verbose = () => document.getElementById("verbose").checked;
+    const pairMode = () => document.querySelector('input[name="pair"]:checked').value;
+    const hostId = () => document.getElementById("hostid").value.trim();
+    const systemBuid = () => document.getElementById("buid").value.trim();
+    const tlsClientAuth = () => document.getElementById("tls-client-auth").value;
+    const tlsSni = () => document.getElementById("tls-sni").value;
+    const plistStatus = document.getElementById("plist-status");
+    const usbSectionH2 = document.getElementById("usb-section-h2");
+    const usbPairingContext = document.getElementById("usb-pairing-context");
+    const usbMuxHelp = document.getElementById("usb-mux-help");
     const btnMux = document.getElementById("btn-mux");
-    const btnCli = document.getElementById("btn-cli");
-    const extra = document.getElementById("extra");
-    const cmdSel = document.getElementById("cmd");
+    const btnQt = document.getElementById("btn-qt");
+    /** Full XML text of the loaded pair-record (for WASM plist fetch). */
+    let plistXmlText = null;
 
-    let wasm;
-    let device;
+    function refreshUsbSectionForPairing() {
+      const mode = pairMode();
+      /** Pair-record <em>mode</em>: hide mux/QueryType UI (they do not use the plist). */
+      const plistPairingSelected = mode === "plist";
 
-    function parseExtra(s) {
-      if (!s.trim()) return [];
-      // naive split respecting quotes
-      const parts = [];
-      let cur = "";
-      let q = null;
-      for (let i = 0; i < s.length; i++) {
-        const c = s[i];
-        if (q) {
-          if (c === q) q = null;
-          else cur += c;
-          continue;
-        }
-        if (c === '"' || c === "'") { q = c; continue; }
-        if (/\s/.test(c)) {
-          if (cur.length) { parts.push(cur); cur = ""; }
-          continue;
-        }
-        cur += c;
+      if (plistPairingSelected) {
+        usbSectionH2.textContent = "USB — device (pair-record plist)";
+        usbPairingContext.innerHTML =
+          "<strong>Pair-record mode:</strong> <strong>Mux handshake</strong> and <strong>QueryType</strong> are hidden — they do not use your plist. Use <strong>Request Apple device</strong>, then <strong>Info</strong> below.";
+        usbPairingContext.hidden = false;
+        if (usbMuxHelp) usbMuxHelp.hidden = true;
+        btnMux.hidden = true;
+        btnQt.hidden = true;
+        return;
       }
-      if (cur.length) parts.push(cur);
-      return parts;
+
+      if (usbMuxHelp) usbMuxHelp.hidden = false;
+      btnMux.hidden = false;
+      btnQt.hidden = false;
+
+      let title = "USB — mux vs QueryType";
+      let ctx = "";
+      let showCtx = true;
+      if (mode === "random") {
+        title = "USB — mux vs QueryType (random pairing → Info only)";
+        ctx =
+          "<strong>Random pairing:</strong> UUIDs for <code>StartSession</code> apply when you use <strong>Info</strong> — not for mux/QueryType. Open <strong>Mux vs QueryType — full text</strong> above for step-by-step help.";
+      } else if (mode === "legacy") {
+        title = "USB — mux vs QueryType (legacy pairing → Info only)";
+        ctx =
+          "<strong>Legacy pairing:</strong> fixed HostID / SystemBUID apply only to <strong>Info</strong> — mux/QueryType ignore them. Expand <strong>Mux vs QueryType — full text</strong> for details.";
+      } else {
+        showCtx = false;
+      }
+      usbSectionH2.textContent = title;
+      if (showCtx && ctx) {
+        usbPairingContext.innerHTML = ctx;
+        usbPairingContext.hidden = false;
+      } else {
+        usbPairingContext.textContent = "";
+        usbPairingContext.hidden = true;
+      }
     }
 
-    try {
-      wasm = await import("./pkg/idevice_wasm.js");
-      await wasm.default();
-    } catch (e) {
-      outWeb.textContent = "WASM load failed — run scripts/build-wasm.sh first.\n" + e;
-      btnPick.disabled = true;
+    /**
+     * @param {string} xmlText
+     * @returns {Record<string, string>}
+     */
+    function readPlistRootDictStrings(xmlText) {
+      const d = new DOMParser().parseFromString(xmlText, "application/xml");
+      if (d.querySelector("parsererror")) {
+        throw new Error("Invalid plist XML");
+      }
+      const dict = d.querySelector("plist dict");
+      if (!dict) throw new Error("No dict found in plist");
+      /** @type {Record<string, string>} */
+      const out = {};
+      let pendingKey = null;
+      for (const el of dict.children) {
+        if (!(el instanceof Element)) continue;
+        if (el.tagName === "key") {
+          pendingKey = (el.textContent ?? "").trim();
+        } else if (pendingKey !== null) {
+          if (el.tagName === "string") out[pendingKey] = el.textContent ?? "";
+          pendingKey = null;
+        }
+      }
+      return out;
     }
 
-    btnPick.addEventListener("click", async () => {
-      if (!wasm) return;
-      outWeb.textContent = "Requesting device…";
+    document.getElementById("plist-file").addEventListener("change", async (ev) => {
+      const input = /** @type {HTMLInputElement} */ (ev.target);
+      const file = input.files?.[0];
+      if (!file) return;
       try {
-        device = await wasm.requestAppleDevice();
-        outWeb.textContent = "Device handle OK. Serial / product: see DevTools → USB.\nYou can run the mux handshake next.";
-        btnMux.disabled = false;
-      } catch (e) {
-        outWeb.textContent = String(e);
-      }
-    });
-
-    btnMux.addEventListener("click", async () => {
-      if (!wasm) return;
-      outWeb.textContent = "Mux handshake…";
-      try {
-        let msg;
-        if (device) {
-          msg = await wasm.muxLockdownHandshake(device);
-        } else {
-          msg = await wasm.muxLockdownHandshakePickDevice();
-        }
-        outWeb.textContent = msg;
-      } catch (e) {
-        outWeb.textContent = String(e);
-      }
-    });
-
-    btnCli.addEventListener("click", async () => {
-      const sub = cmdSel.value;
-      const argv = [sub, ...parseExtra(extra.value)];
-      outCli.textContent = "Running…";
-      try {
-        const res = await fetch("/api/cli", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ argv }),
-        });
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); } catch { data = { raw: text }; }
-        if (!res.ok) {
-          outCli.textContent = JSON.stringify(data, null, 2);
+        const buf = await file.arrayBuffer();
+        const u8 = new Uint8Array(buf);
+        const magic = String.fromCharCode(...u8.slice(0, 6));
+        if (magic === "bplist") {
+          plistXmlText = null;
+          refreshUsbSectionForPairing();
+          plistStatus.textContent =
+            "This file is a binary plist — save as XML from your machine, or type HostID / SystemBUID below.";
           return;
         }
-        outCli.textContent =
-          "exit " + data.code + "\n--- stdout ---\n" + (data.stdout || "") +
-          "\n--- stderr ---\n" + (data.stderr || "");
+        const text = new TextDecoder("utf-8", { fatal: false }).decode(u8);
+        plistXmlText = text;
+        refreshUsbSectionForPairing();
+        const dict = readPlistRootDictStrings(text);
+        const h = dict.HostID?.trim();
+        const s = dict.SystemBUID?.trim();
+        if (!h || !s) {
+          plistXmlText = null;
+          refreshUsbSectionForPairing();
+          plistStatus.textContent =
+            "Plist has no HostID / SystemBUID at the root dict (wrong file or nested structure).";
+          return;
+        }
+        document.getElementById("hostid").value = h;
+        document.getElementById("buid").value = s;
+        plistStatus.textContent = `Loaded ${file.name} — HostID and SystemBUID filled.`;
+        document.querySelector('input[name="pair"][value="plist"]').checked = true;
+        refreshUsbSectionForPairing();
       } catch (e) {
-        outCli.textContent = String(e);
+        plistXmlText = null;
+        refreshUsbSectionForPairing();
+        plistStatus.textContent = String(e);
+      }
+    });
+
+    for (const el of document.querySelectorAll('input[name="pair"]')) {
+      el.addEventListener("change", () => refreshUsbSectionForPairing());
+    }
+
+    /** @type {USBDevice | null} */
+    let dev = null;
+
+    try {
+      await init();
+      refreshUsbSectionForPairing();
+      out.textContent = "Ready — pick a device, then run mux or lockdown.";
+    } catch (e) {
+      out.textContent = "WASM failed — run ./scripts/build-wasm.sh\n" + e;
+    }
+
+    document.getElementById("btn-pick").addEventListener("click", async () => {
+      try {
+        dev = await requestAppleDevice();
+        out.textContent = "Device selected.";
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    function needDev() {
+      if (!dev) {
+        out.textContent = "Request an Apple device first.";
+        return false;
+      }
+      return true;
+    }
+
+    document.getElementById("btn-mux").addEventListener("click", async () => {
+      if (!needDev()) return;
+      try {
+        out.textContent = await muxLockdownHandshake(dev, verbose());
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btn-qt").addEventListener("click", async () => {
+      if (!needDev()) return;
+      try {
+        out.textContent = await lockdownQueryType(dev, verbose());
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btn-plist-fetch").addEventListener("click", async () => {
+      if (!needDev()) return;
+      if (!plistXmlText || !plistXmlText.trim()) {
+        out.textContent =
+          "Load an XML pair-record plist (file picker in Pairing mode) first — or paste/export HostID+SystemBUID and use Battery with “From plist”.";
+        return;
+      }
+      out.textContent = "Running plist fetch (see DevTools console for [idevice-wasm] logs)…";
+      try {
+        out.textContent = await lockdownFetchWithPlistXml(
+          dev,
+          plistXmlText,
+          verbose(),
+          tlsClientAuth(),
+          tlsSni()
+        );
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btn-bat").addEventListener("click", async () => {
+      if (!needDev()) return;
+      try {
+        out.textContent = await lockdownBattery(
+          dev,
+          pairMode(),
+          hostId(),
+          systemBuid(),
+          verbose(),
+          plistXmlText ?? "",
+          tlsClientAuth(),
+          tlsSni()
+        );
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btn-diag").addEventListener("click", async () => {
+      if (!needDev()) return;
+      try {
+        out.textContent = await lockdownDiagnostics(
+          dev,
+          pairMode(),
+          hostId(),
+          systemBuid(),
+          verbose(),
+          plistXmlText ?? "",
+          tlsClientAuth(),
+          tlsSni()
+        );
+      } catch (e) {
+        out.textContent = String(e);
+      }
+    });
+
+    document.getElementById("btn-crash").addEventListener("click", async () => {
+      if (!needDev()) return;
+      if (!plistXmlText || !plistXmlText.trim()) {
+        out.textContent =
+          "Load a full XML pair-record plist first (with PEM keys). Short help:\n" +
+          lockdownCrashReportsInfo();
+        return;
+      }
+      out.textContent = "Crash reports: mover → ping → AFC (see console)…";
+      try {
+        const arr = await lockdownCrashReports(
+          dev,
+          plistXmlText,
+          verbose(),
+          tlsClientAuth(),
+          tlsSni(),
+          document.getElementById("crash-keep").checked,
+          "",
+          false
+        );
+        const lines = Array.from(arr, (o) => o.name);
+        out.textContent =
+          `Done: ${arr.length} file(s). Names:\n` +
+          lines.join("\n") +
+          "\n\nEach item is { name, data } (data is Uint8Array) — inspect in DevTools or save from a small script.";
+      } catch (e) {
+        out.textContent = String(e);
       }
     });
   </script>

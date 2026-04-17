@@ -22,6 +22,11 @@ On Linux, another stack often holds the device. In a terminal (then unplug/replu
   sudo modprobe -r ipheth              # iPhone USB Ethernet; stop any network using that NIC first\n\
   systemctl --user stop gvfs-afc-volume-monitor.service";
 
+/// Appended for **WebUSB** (browser) only: native tools can still work via usbmuxd while Chromium cannot.
+pub const WEBUSB_CHROMIUM_USB_BUSY_EXPLAINER: &str = "\n\n\
+A native stack may still reach the device over **usbmuxd** (`/var/run/usbmuxd`) while **Chromium WebUSB** cannot use that path — it must claim the USB interface directly. \
+Either free the device for WebUSB using the hints above, or keep using a native client with usbmuxd.";
+
 #[inline]
 pub fn build_mux_version_request() -> [u8; 20] {
     let mut b = [0u8; 20];

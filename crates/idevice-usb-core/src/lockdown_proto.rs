@@ -192,13 +192,178 @@ fn parse_plist_bool_after_key(xml: &str, key: &str) -> bool {
         || tail.starts_with("<integer>1</integer>")
 }
 
-fn parse_lockdown_error_string(xml: &str) -> Option<String> {
+/// Lockdownd **`Error`** string from a plist reply, if present.
+pub fn parse_lockdown_error_string(xml: &str) -> Option<String> {
     let key = "<key>Error</key>";
     let i = xml.find(key)? + key.len();
     let tail = xml[i..].trim_start();
     let rest = tail.strip_prefix("<string>")?;
     let end = rest.find("</string>")?;
     Some(rest[..end].to_string())
+}
+
+/// Human-readable summary of a lockdownd **`GetValue`** XML reply: **`Error`**, or the **`Value`**
+/// payload (**`string`**, **`integer`**, **`real`**, **`true`/`false`**, **`data`**, nested **`dict`**).
+/// Used by WASM and tests; falls back to a short raw snippet when the value shape is unknown.
+pub fn format_lockdown_getvalue_display(xml: &str) -> String {
+    if let Some(err) = parse_lockdown_error_string(xml) {
+        return format!("Error: {}", err);
+    }
+    let key_needle = "<key>Value</key>";
+    let Some(i) = xml.find(key_needle) else {
+        if let Some(s) = parse_get_value_string(xml) {
+            return s;
+        }
+        return format!(
+            "(unparsed response, {} bytes)\n{}",
+            xml.len(),
+            trunc_display(xml, 1200)
+        );
+    };
+    let after = xml[i + key_needle.len()..].trim_start();
+    match parse_one_plist_value_for_display(after) {
+        Some((s, _)) if !s.is_empty() => s,
+        _ => {
+            if let Some(s) = parse_get_value_string(xml) {
+                return s;
+            }
+            format!(
+                "(could not parse Value; {} bytes)\n{}",
+                xml.len(),
+                trunc_display(after, 1200)
+            )
+        }
+    }
+}
+
+fn trunc_display(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        s.chars().take(max_chars).collect::<String>() + "…"
+    }
+}
+
+/// Parses one plist value element at `s` start (after optional whitespace). Returns `(display, bytes_consumed_from_s)`.
+fn parse_one_plist_value_for_display(s: &str) -> Option<(String, usize)> {
+    let t = s.trim_start();
+    let skipped = s.len() - t.len();
+    if t.starts_with("<string>") {
+        let inner = &t[8..];
+        let end = inner.find("</string>")?;
+        let v = inner[..end].to_string();
+        let consumed = skipped + 8 + end + 9;
+        return Some((v, consumed));
+    }
+    if t.starts_with("<integer>") {
+        let inner = &t[9..];
+        let end = inner.find("</integer>")?;
+        let v = inner[..end].trim().to_string();
+        let consumed = skipped + 9 + end + 10;
+        return Some((v, consumed));
+    }
+    if t.starts_with("<real>") {
+        let inner = &t[6..];
+        let end = inner.find("</real>")?;
+        let v = inner[..end].trim().to_string();
+        let consumed = skipped + 6 + end + 7;
+        return Some((v, consumed));
+    }
+    if t.starts_with("<true/>") || t.starts_with("<true />") {
+        let n = if t.starts_with("<true/>") { 7 } else { 8 };
+        return Some(("true".into(), skipped + n));
+    }
+    if t.starts_with("<false/>") || t.starts_with("<false />") {
+        let n = if t.starts_with("<false/>") { 8 } else { 9 };
+        return Some(("false".into(), skipped + n));
+    }
+    if t.starts_with("<data>") {
+        let inner = &t[6..];
+        let end = inner.find("</data>")?;
+        let b64: String = inner[..end].chars().filter(|c| !c.is_whitespace()).collect();
+        use base64::{engine::general_purpose, Engine as _};
+        let Ok(bytes) = general_purpose::STANDARD.decode(&b64) else {
+            return Some((format!("<data> {} bytes base64", b64.len()), skipped + 6 + end + 7));
+        };
+        if bytes.len() == 6 {
+            let mac = bytes
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(":");
+            return Some((mac, skipped + 6 + end + 7));
+        }
+        if let Ok(utf8) = String::from_utf8(bytes) {
+            return Some((utf8, skipped + 6 + end + 7));
+        }
+        return Some((format!("<binary data, {} bytes>", b64.len()), skipped + 6 + end + 7));
+    }
+    if t.starts_with("<dict>") {
+        let after_open = &t[6..];
+        let mut depth = 1u32;
+        let mut pos = 0usize;
+        while pos < after_open.len() {
+            if after_open[pos..].starts_with("<dict>") {
+                depth += 1;
+                pos += 6;
+            } else if after_open[pos..].starts_with("</dict>") {
+                depth -= 1;
+                if depth == 0 {
+                    let inner = &after_open[..pos];
+                    let formatted = format_plist_dict_lines(inner);
+                    let consumed = skipped + 6 + pos + 7;
+                    return Some((formatted, consumed));
+                }
+                pos += 7;
+            } else {
+                pos += 1;
+            }
+        }
+        return None;
+    }
+    None
+}
+
+fn format_plist_dict_lines(inner: &str) -> String {
+    let mut rest = inner;
+    let mut lines: Vec<String> = Vec::new();
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        let Some(krest) = rest.strip_prefix("<key>") else {
+            break;
+        };
+        let Some(kend) = krest.find("</key>") else {
+            break;
+        };
+        let key = krest[..kend].trim();
+        rest = &krest[kend + 6..];
+        rest = rest.trim_start();
+        let Some((val, consumed)) = parse_one_plist_value_for_display(rest) else {
+            lines.push(format!("{}: (unparsed)", key));
+            break;
+        };
+        rest = &rest[consumed..];
+        if val.contains('\n') {
+            lines.push(format!("{}:\n{}", key, indent_lines(&val, "  ")));
+        } else {
+            lines.push(format!("{}: {}", key, val));
+        }
+    }
+    if lines.is_empty() {
+        "(empty dict)".into()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn indent_lines(s: &str, prefix: &str) -> String {
+    s.lines()
+        .map(|line| format!("{}{}", prefix, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse **`Port`** and optional **`EnableServiceSSL`** from lockdownd’s **`StartService`** reply.
@@ -394,7 +559,7 @@ pub fn validate_pair_plist(
 {}
 \t</dict>
 \t<key>ProtocolVersion</key><string>2</string>
-\t<key>Request</key><string>ValidatePair</string>
+    \t<key>Request</key><string>ValidatePair</string>
 </dict>
 </plist>",
         device_esc,
@@ -404,4 +569,39 @@ pub fn validate_pair_plist(
         system_buid,
         wifi_block
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_display_error() {
+        let xml = r#"<?xml version="1.0"?>
+<plist><dict><key>Error</key><string>GetProhibited</string></dict></plist>"#;
+        assert_eq!(
+            format_lockdown_getvalue_display(xml),
+            "Error: GetProhibited"
+        );
+    }
+
+    #[test]
+    fn format_display_string_value() {
+        let xml = r#"<dict><key>Value</key><string>iPhone</string></dict>"#;
+        assert_eq!(format_lockdown_getvalue_display(xml), "iPhone");
+    }
+
+    #[test]
+    fn format_display_battery_dict() {
+        let xml = r#"<plist><dict>
+<key>Value</key><dict>
+<key>BatteryCurrentCapacity</key><integer>92</integer>
+<key>ExternalChargeCapable</key><true/>
+<key>IsCharging</key><false/>
+</dict></dict></plist>"#;
+        let s = format_lockdown_getvalue_display(xml);
+        assert!(s.contains("BatteryCurrentCapacity: 92"));
+        assert!(s.contains("ExternalChargeCapable: true"));
+        assert!(s.contains("IsCharging: false"));
+    }
 }

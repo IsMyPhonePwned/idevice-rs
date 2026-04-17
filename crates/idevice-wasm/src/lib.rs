@@ -1,22 +1,25 @@
-//! WebAssembly + **WebUSB** entry: Apple mux **VERSION** (+ **SETUP** for mux v2) and pseudo-**TCP**
-//! **SYN → SYN-ACK → ACK** to **lockdownd** (port **62078**), sharing **`iphone-usb-core`** with **`iphone-cli`**.
+//! WebAssembly + **WebUSB**: Apple mux, pseudo-TCP to **lockdownd**, cleartext lockdown, and optional **rustls**
+//! lockdown TLS when a **full** XML pair-record plist (PEM keys) is provided — same idea as the native `idevice` crate.
 //!
-//! Full pairing / TLS / diagnostics stay in the native CLI; the browser build proves the USB path
-//! and mux framing in Chromium (secure context + WebUSB permission).
+//! Progress is logged to the browser **`console`** with prefix **`[idevice-wasm]`** (`info` / `warn`, plus
+//! **`debug`** when **`verbose`** is true).
 
 use wasm_bindgen::prelude::*;
 
+mod afc_wasm;
+mod crash_reports_wasm;
+mod lockdown_tls_wasm;
+mod lockdown_wasm;
 mod mux_probe;
+mod pair_record_plist;
+mod wasm_crypto;
+mod wasm_log;
 mod web_usb;
+mod web_usb_mux_hub;
+mod web_usb_session;
 
 /// One-time panic hook → `console.error` (helps debug WASM panics in DevTools).
 #[wasm_bindgen(start)]
 pub fn wasm_start_hook() {
     console_error_panic_hook::set_once();
-}
-
-/// `navigator.usb.requestDevice` (Apple VID **0x05ac**). Call from a **click** handler.
-#[wasm_bindgen(js_name = requestAppleDevice)]
-pub async fn request_apple_device_js() -> Result<web_sys::UsbDevice, JsValue> {
-    web_usb::request_apple_device().await
 }

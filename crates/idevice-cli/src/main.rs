@@ -1,5 +1,6 @@
-//! CLI entry: list devices, mux smoke test, pair, battery, diagnostics, and crash report copy.
+//! CLI entry: list devices, mux smoke test, pair, battery, diagnostics, syslog relay, and crash report copy.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use idevice_usb_core::{lockdown_proto, PairingIds, TcpConn};
 #[derive(Parser, Debug)]
 #[command(name = "idevice")]
 #[command(
-    about = "Apple USB mux + lockdownd: pair, battery, diagnostics, crash reports (Rust / idevice-rs)."
+    about = "Apple USB mux + lockdownd: pair, battery, diagnostics, syslog, crash reports (Rust / idevice-rs)."
 )]
 struct Cli {
     #[command(flatten)]
@@ -109,7 +110,7 @@ struct DeviceArgs {
     #[arg(long, global = true, value_enum, default_value_t = PairIdsMode::Random)]
     pair_ids: PairIdsMode,
     /// Load **`HostID`**, **`SystemBUID`**, and PEM keys/certs from a **libimobiledevice**-style plist (same keys as
-    /// **`idevicepair`** / **`/var/lib/lockdown/<UDID>.plist`**). **`run`/`battery`/`diagnostics`/`crash-reports`**: skip **`Pair`** if load succeeds.
+    /// **`idevicepair`** / **`/var/lib/lockdown/<UDID>.plist`**). **`run`/`battery`/`diagnostics`/`syslog`/`crash-reports`**: skip **`Pair`** if load succeeds.
     #[arg(long, global = true)]
     pair_record: Option<PathBuf>,
     /// With **`--pair-record-dir DIR`** and no **`--pair-record`**, load **`DIR/<USB_serial>.plist`** (typical:
@@ -134,6 +135,12 @@ enum Commands {
     Run,
     /// Pair (or pair-record), then **`StartSession` → TLS** and many **`GetValue`** queries (lockdown snapshot; not full sysdiagnose).
     Diagnostics,
+    /// Pair, **`StartSession` → TLS**, then stream **`com.apple.syslog_relay`** (like **`idevicesyslog`**; direct USB mux only).
+    Syslog {
+        /// Write the syslog stream to this file instead of stdout.
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
     /// Pair, **`StartSession` → TLS**, then **`com.apple.crashreportmover`** + **`com.apple.crashreportcopymobile`** (AFC), like **`idevicecrashreport`**.
     CrashReports {
         /// Output directory on the host (ignored with **`--remove-all`**; that mode uses `.` on host).
@@ -167,6 +174,7 @@ fn run() -> Result<(), String> {
         Commands::Pair => cmd_pair(&cli.device),
         Commands::Battery | Commands::Run => cmd_run(&cli.device),
         Commands::Diagnostics => cmd_diagnostics(&cli.device),
+        Commands::Syslog { output } => cmd_syslog(&cli.device, output.as_deref()),
         Commands::CrashReports {
             out_dir,
             no_keep,
@@ -510,6 +518,63 @@ fn cmd_diagnostics(device: &DeviceArgs) -> Result<(), String> {
     println!("\n=== Diagnostics (StartSession → TLS → many GetValue) ===");
     cmd_diagnostics_inner(&mut client, &keys, &ids, device)?;
     Ok(())
+}
+
+fn cmd_syslog(device: &DeviceArgs, output: Option<&Path>) -> Result<(), String> {
+    let (bus, addr, serial) = resolve_device_args(device)?;
+    let (usb_serial, mut client) = open_lockdown_for_cli(connect_args(device))?;
+    if let Ok(mut usb) = open_apple(bus, addr, serial) {
+        println!(
+            "=== Phone (identified on USB) ===\n{}",
+            format_apple_device_identity(&mut usb)?
+        );
+    } else {
+        println!(
+            "=== Phone (via usbmuxd) ===\nIdentifier (pair-record name): {}",
+            usb_serial
+        );
+    }
+    let (keys, ids, from_saved_record) = load_or_generate_keys_and_ids(device, &usb_serial)?;
+    if !lockdown_pair_validate_reopen(
+        &mut client,
+        &keys,
+        &ids,
+        device,
+        from_saved_record,
+        "syslog",
+    )? {
+        return Ok(());
+    }
+    println!("\n=== Syslog relay (`com.apple.syslog_relay`, like idevicesyslog) ===");
+    match output {
+        Some(path) => println!("Writing to {} — Ctrl+C to stop.\n", path.display()),
+        None => println!("Streaming to stdout — Ctrl+C to stop.\n"),
+    }
+    establish_lockdown_tls_session(&mut client, &keys, &ids, device, "[syslog]")?;
+    match output {
+        Some(path) => {
+            let f = File::create(path).map_err(|e| format!("create {}: {}", path.display(), e))?;
+            idevice::syslog_relay::relay_syslog(
+                &mut client,
+                &keys,
+                device.lockdown_tls_client_auth,
+                device.lockdown_tls_sni,
+                device.lockdown_tls_debug,
+                f,
+            )
+        }
+        None => {
+            let stdout = std::io::stdout();
+            idevice::syslog_relay::relay_syslog(
+                &mut client,
+                &keys,
+                device.lockdown_tls_client_auth,
+                device.lockdown_tls_sni,
+                device.lockdown_tls_debug,
+                stdout.lock(),
+            )
+        }
+    }
 }
 
 fn cmd_crash_reports(

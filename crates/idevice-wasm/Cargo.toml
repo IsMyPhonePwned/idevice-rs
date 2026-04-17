@@ -2,20 +2,31 @@
 name = "idevice-wasm"
 version = "0.1.0"
 edition = "2021"
-description = "WebUSB + WASM: Apple mux and pseudo-TCP handshake to lockdownd (Chromium)"
+description = "WebUSB + WASM: Apple mux, lockdownd cleartext + TLS (pair-record PEM)"
 publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+async-recursion = "1.1"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
 idevice-usb-core = { path = "../idevice-usb-core" }
 js-sys = "0.3"
+pem = "3"
+plist = "1"
+# Browser wasm: ring needs this feature so `SystemRandom: SecureRandom` (see rustls#1748).
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+rsa = { version = "0.9", features = ["sha2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+# `web` enables `UnixTime::now()` on wasm32-unknown-unknown (via web-time); required for rustls ticketer.
+rustls-pki-types = { version = "1.14", features = ["std", "alloc", "web"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = [
+    "console",
     "Navigator",
     "Usb",
     "UsbAlternateInterface",
