@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "crates/idevice-usb-core",
+    "crates/idevice",
+    "crates/idevice-cli",
+    "crates/idevice-wasm",
+]
+# `idevice-wasm` is Web-only; build with `cargo build -p idevice-wasm --target wasm32-unknown-unknown` or `scripts/build-wasm.sh`.
+default-members = [
+    "crates/idevice-usb-core",
+    "crates/idevice",
+    "crates/idevice-cli",
+]
+resolver = "2"

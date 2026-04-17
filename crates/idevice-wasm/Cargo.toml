@@ -1,0 +1,33 @@
+[package]
+name = "idevice-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebUSB + WASM: Apple mux and pseudo-TCP handshake to lockdownd (Chromium)"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+idevice-usb-core = { path = "../idevice-usb-core" }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Navigator",
+    "Usb",
+    "UsbAlternateInterface",
+    "UsbConfiguration",
+    "UsbDevice",
+    "UsbDeviceFilter",
+    "UsbDeviceRequestOptions",
+    "UsbDirection",
+    "UsbEndpoint",
+    "UsbEndpointType",
+    "UsbInTransferResult",
+    "UsbInterface",
+    "UsbOutTransferResult",
+    "Window",
+] }

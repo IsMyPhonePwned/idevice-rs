@@ -1,0 +1,26 @@
+[package]
+name = "idevice"
+version = "0.1.0"
+edition = "2021"
+description = "Apple USB mux, lockdownd, AFC — reusable library for CLI and other Rust projects"
+publish = false
+
+[features]
+default = []
+# Enables `clap::ValueEnum` on TLS option types for the `idevice-cli` binary.
+with-clap = ["dep:clap"]
+
+[dependencies]
+idevice-usb-core = { path = "../idevice-usb-core" }
+rusb = "0.9"
+
+plist = "1"
+rcgen = { version = "0.12", features = ["x509-parser"] }
+pem = "3"
+rsa = { version = "0.9", features = ["sha2"] }
+rand = "0.8"
+base64 = "0.22"
+getrandom = "0.2"
+ring = "0.17"
+rustls = { version = "0.22", default-features = false, features = ["ring", "tls12"] }
+clap = { version = "4", features = ["derive"], optional = true }

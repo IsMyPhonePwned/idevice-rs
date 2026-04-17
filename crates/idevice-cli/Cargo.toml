@@ -1,0 +1,15 @@
+[package]
+name = "idevice-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI for Apple USB mux + lockdownd (pair, battery, diagnostics, crash reports)"
+publish = false
+
+[[bin]]
+name = "idevice"
+path = "src/main.rs"
+
+[dependencies]
+idevice = { path = "../idevice", features = ["with-clap"] }
+idevice-usb-core = { path = "../idevice-usb-core" }
+clap = { version = "4", features = ["derive"] }

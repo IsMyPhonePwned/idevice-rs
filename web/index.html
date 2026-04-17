@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>idevice-rs (WebUSB + host CLI)</title>
+  <style>
+    :root {
+      font-family: system-ui, sans-serif;
+      line-height: 1.45;
+      color: #e8e8ec;
+      background: #12141a;
+    }
+    body { margin: 0 auto; max-width: 52rem; padding: 1.25rem; }
+    h1 { font-size: 1.25rem; font-weight: 600; }
+    h2 { font-size: 1rem; margin-top: 1.5rem; color: #aab; }
+    section { margin-bottom: 1.25rem; }
+    button, select, input {
+      font: inherit;
+      padding: 0.4rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid #334;
+      background: #1e2230;
+      color: inherit;
+    }
+    button { cursor: pointer; }
+    button:hover { background: #2a3040; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    pre {
+      background: #0c0e14;
+      border: 1px solid #2a3040;
+      border-radius: 8px;
+      padding: 0.75rem;
+      overflow: auto;
+      max-height: 18rem;
+      font-size: 0.82rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.35rem 0; }
+    label { color: #aab; font-size: 0.9rem; }
+    .hint { font-size: 0.85rem; color: #889; margin-top: 0.35rem; }
+    a { color: #8bf; }
+  </style>
+</head>
+<body>
+  <h1>idevice-rs</h1>
+  <p>
+    WebUSB (Chromium) can open the Apple mux pipe and complete a pseudo-TCP handshake to lockdownd.
+    Pairing, TLS, battery, diagnostics, and crash reports run on the host via the
+    <code>idevice</code> CLI through <code>POST /api/cli</code> (inline Python in <code>scripts/serve.sh</code>).
+    From a terminal use <code>cargo run -p idevice-cli -- …</code> (see <code>README.md</code>).
+  </p>
+
+  <section>
+    <h2>WebUSB</h2>
+    <div class="row">
+      <button type="button" id="btn-pick">Request Apple device</button>
+      <button type="button" id="btn-mux" disabled>Mux + lockdownd TCP handshake</button>
+    </div>
+    <p class="hint">Requires a secure context (HTTPS or localhost) and a user gesture. On Linux you may need to stop <code>usbmuxd</code> so the browser can claim the interface.</p>
+    <pre id="out-webusb">(no WebUSB output yet)</pre>
+  </section>
+
+  <section>
+    <h2>Host CLI (USB on this machine)</h2>
+    <div class="row">
+      <label for="cmd">Command</label>
+      <select id="cmd">
+        <option value="list">list</option>
+        <option value="connect">connect</option>
+        <option value="mux">mux</option>
+        <option value="pair">pair</option>
+        <option value="battery">battery</option>
+        <option value="run">run</option>
+        <option value="diagnostics">diagnostics</option>
+        <option value="crash-reports">crash-reports</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="extra">Extra args</label>
+      <input id="extra" type="text" style="flex:1;min-width:12rem" placeholder='e.g. --pair-record /var/lib/lockdown/XXXX.plist' />
+    </div>
+    <div class="row">
+      <button type="button" id="btn-cli">Run via server</button>
+    </div>
+    <p class="hint">For <code>crash-reports</code>, set extra args to the host output directory first (e.g. <code>./crashes</code>). Omit <code>--no-keep</code> to leave logs on the device after copy; pass <code>--no-keep</code> to remove them (move).</p>
+    <pre id="out-cli">(no CLI output yet)</pre>
+  </section>
+
+  <script type="module">
+    const outWeb = document.getElementById("out-webusb");
+    const outCli = document.getElementById("out-cli");
+    const btnPick = document.getElementById("btn-pick");
+    const btnMux = document.getElementById("btn-mux");
+    const btnCli = document.getElementById("btn-cli");
+    const extra = document.getElementById("extra");
+    const cmdSel = document.getElementById("cmd");
+
+    let wasm;
+    let device;
+
+    function parseExtra(s) {
+      if (!s.trim()) return [];
+      // naive split respecting quotes
+      const parts = [];
+      let cur = "";
+      let q = null;
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (q) {
+          if (c === q) q = null;
+          else cur += c;
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; continue; }
+        if (/\s/.test(c)) {
+          if (cur.length) { parts.push(cur); cur = ""; }
+          continue;
+        }
+        cur += c;
+      }
+      if (cur.length) parts.push(cur);
+      return parts;
+    }
+
+    try {
+      wasm = await import("./pkg/idevice_wasm.js");
+      await wasm.default();
+    } catch (e) {
+      outWeb.textContent = "WASM load failed — run scripts/build-wasm.sh first.\n" + e;
+      btnPick.disabled = true;
+    }
+
+    btnPick.addEventListener("click", async () => {
+      if (!wasm) return;
+      outWeb.textContent = "Requesting device…";
+      try {
+        device = await wasm.requestAppleDevice();
+        outWeb.textContent = "Device handle OK. Serial / product: see DevTools → USB.\nYou can run the mux handshake next.";
+        btnMux.disabled = false;
+      } catch (e) {
+        outWeb.textContent = String(e);
+      }
+    });
+
+    btnMux.addEventListener("click", async () => {
+      if (!wasm) return;
+      outWeb.textContent = "Mux handshake…";
+      try {
+        let msg;
+        if (device) {
+          msg = await wasm.muxLockdownHandshake(device);
+        } else {
+          msg = await wasm.muxLockdownHandshakePickDevice();
+        }
+        outWeb.textContent = msg;
+      } catch (e) {
+        outWeb.textContent = String(e);
+      }
+    });
+
+    btnCli.addEventListener("click", async () => {
+      const sub = cmdSel.value;
+      const argv = [sub, ...parseExtra(extra.value)];
+      outCli.textContent = "Running…";
+      try {
+        const res = await fetch("/api/cli", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ argv }),
+        });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        if (!res.ok) {
+          outCli.textContent = JSON.stringify(data, null, 2);
+          return;
+        }
+        outCli.textContent =
+          "exit " + data.code + "\n--- stdout ---\n" + (data.stdout || "") +
+          "\n--- stderr ---\n" + (data.stderr || "");
+      } catch (e) {
+        outCli.textContent = String(e);
+      }
+    });
+  </script>
+</body>
+</html>
