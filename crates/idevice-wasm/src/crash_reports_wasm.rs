@@ -14,11 +14,11 @@ use crate::lockdown_tls_wasm::{
     handshake_tls_mux_tcp_wasm, tls_read_plain_wasm, LockdownTlsClientAuth, LockdownTlsSni,
 };
 use crate::pair_record_plist::pair_record_from_xml_plist;
-use crate::wasm_crypto::WasmHostKeys;
+use crate::wasm_crypto::{generate_host_keys, WasmHostKeys};
 use crate::wasm_log;
 use crate::web_usb::prepare_apple_usb;
 use crate::web_usb_mux_hub::WebUsbMuxHub;
-use crate::web_usb_session::WebUsbLockdownPipe;
+use crate::web_usb_session::{pairing_ids_from_mode, WebUsbLockdownPipe};
 
 const MOVER: &str = "com.apple.crashreportmover";
 const COPY_MOBILE: &str = "com.apple.crashreportcopymobile";
@@ -287,8 +287,12 @@ pub async fn crash_reports_to_js_array<'a>(
     Ok(arr.into())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn crash_reports_flow(
     device: UsbDevice,
+    mode: &str,
+    host_id: &str,
+    system_buid: &str,
     pair_record_plist_xml: &str,
     verbose: bool,
     tls_client_auth: &str,
@@ -297,21 +301,45 @@ pub async fn crash_reports_flow(
     filter_substr: &str,
     remove_all: bool,
 ) -> Result<JsValue, JsValue> {
-    let (keys, ids) = pair_record_from_xml_plist(pair_record_plist_xml.trim())
-        .map_err(|e| JsValue::from_str(&e))?;
-    let eps = prepare_apple_usb(&device).await?;
-    let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
-    let _qt = pipe.query_type().await?;
-    let sess = pipe.start_session_cleartext(&ids).await?;
-    let enable = idevice_usb_core::lockdown_proto::start_session_enable_ssl(&sess);
-    if !enable {
-        return Err(JsValue::from_str(
-            "Crash reports require EnableSessionSSL after StartSession — device did not request TLS.",
-        ));
-    }
+    let plist_text = pair_record_plist_xml.trim();
     let ca = crate::lockdown_tls_wasm::parse_tls_client_auth(tls_client_auth);
     let sni = crate::lockdown_tls_wasm::parse_tls_sni(tls_sni);
-    pipe.upgrade_lockdown_tls(&keys, ca, sni).await?;
+
+    let eps = prepare_apple_usb(&device).await?;
+    let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
+
+    let keys = if !plist_text.is_empty() {
+        let (keys, ids) =
+            pair_record_from_xml_plist(plist_text).map_err(|e| JsValue::from_str(&e))?;
+        wasm_log::info("[crash] pair record plist — StartSession directly");
+        let _qt = pipe.query_type().await?;
+        let sess = pipe.start_session_cleartext(&ids).await?;
+        if !idevice_usb_core::lockdown_proto::start_session_enable_ssl(&sess) {
+            return Err(JsValue::from_str(
+                "Crash reports require EnableSessionSSL after StartSession — device did not request TLS.",
+            ));
+        }
+        pipe.upgrade_lockdown_tls(&keys, ca, sni).await?;
+        keys
+    } else {
+        let ids = pairing_ids_from_mode(mode, host_id, system_buid)?;
+        let keys = generate_host_keys().map_err(|e| JsValue::from_str(&e))?;
+        wasm_log::info("[crash] generated keys — Pair + Trust polling…");
+        let _qt = pipe.query_type().await?;
+        let _ = pipe
+            .pair_with_trust_wait(&keys, &ids, 120, 4)
+            .await?;
+        pipe.reopen_lockdown_tcp().await?;
+        let _qt2 = pipe.query_type().await?;
+        let sess = pipe.start_session_cleartext(&ids).await?;
+        if !idevice_usb_core::lockdown_proto::start_session_enable_ssl(&sess) {
+            return Err(JsValue::from_str(
+                "Crash reports require EnableSessionSSL after StartSession — device did not request TLS.",
+            ));
+        }
+        pipe.upgrade_lockdown_tls(&keys, ca, sni).await?;
+        keys
+    };
 
     let filter = if filter_substr.trim().is_empty() {
         None

@@ -10,14 +10,18 @@ pub const LOCKDOWND_PORT: u16 = 62078;
 /// the WASM build uses this constant only (no CLI).
 pub const LOCKDOWN_TLS_SETTLE_MS: u64 = 0;
 
-/// RFC 4122 UUID v4 (random), lowercase hex — same style as common host tools / pymobiledevice3.
+/// RFC 4122 UUID v4 (random), **UPPERCASE** hex — matches `libimobiledevice/common/idevice.c`'s
+/// `generate_uuid()` which only emits `A-F0-9`. usbmuxd-stored pair records on macOS/Linux are
+/// also uppercase. Lockdownd has been observed to fail post-Trust validation with
+/// `InvalidPairRecord` when fed lowercase UUIDs on some iOS releases, so match the canonical
+/// uppercase form.
 pub fn new_uuid_v4() -> String {
     let mut b = [0u8; 16];
     getrandom::getrandom(&mut b).expect("getrandom for UUID");
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
         b[0], b[1], b[2], b[3],
         b[4], b[5],
         b[6], b[7],
@@ -200,6 +204,25 @@ pub fn parse_lockdown_error_string(xml: &str) -> Option<String> {
     let rest = tail.strip_prefix("<string>")?;
     let end = rest.find("</string>")?;
     Some(rest[..end].to_string())
+}
+
+/// Decode the **`EscrowBag`** value (CFData) from a successful **`Pair`** reply. Lockdownd
+/// returns this base64-encoded blob alongside `Request=Pair` after the user accepts the Trust
+/// prompt; libimobiledevice and pymobiledevice3 store it inside the on-disk pair record so
+/// later sessions can use the **escrow** path on legacy iOS without needing the device to be
+/// unlocked again. We use it the same way: persist with the rest of the pair record.
+///
+/// Whitespace inside the `<data>` block (CFData base64 wraps every 76 cols) is stripped before
+/// decoding, matching `plist`'s and `plistlib`'s behaviour.
+pub fn parse_escrow_bag(xml: &str) -> Option<Vec<u8>> {
+    let key = "<key>EscrowBag</key>";
+    let i = xml.find(key)? + key.len();
+    let tail = xml[i..].trim_start();
+    let rest = tail.strip_prefix("<data>")?;
+    let end = rest.find("</data>")?;
+    let b64: String = rest[..end].chars().filter(|c| !c.is_whitespace()).collect();
+    use base64::{engine::general_purpose, Engine as _};
+    general_purpose::STANDARD.decode(b64.as_bytes()).ok()
 }
 
 /// Human-readable summary of a lockdownd **`GetValue`** XML reply: **`Error`**, or the **`Value`**
@@ -390,26 +413,65 @@ pub fn parse_start_service_response(xml: &str) -> Result<(u16, bool), String> {
 /// daemons). Each row is one lockdownd plist round-trip. Retail / locked / MDM devices often return
 /// **`GetProhibited`** for sensitive keys — callers should record per-item errors and continue.
 pub const LOCKDOWN_DIAGNOSTIC_GET_VALUES: &[(&str, &str, &str)] = &[
+    // --- Identity (root domain) ---
     ("DeviceName", "", "DeviceName"),
-    ("ProductVersion", "", "ProductVersion"),
+    ("ProductName", "", "ProductName"),
     ("ProductType", "", "ProductType"),
+    ("ProductVersion", "", "ProductVersion"),
     ("BuildVersion", "", "BuildVersion"),
     ("SerialNumber", "", "SerialNumber"),
     ("UniqueDeviceID", "", "UniqueDeviceID"),
     ("HardwareModel", "", "HardwareModel"),
-    ("CPUArchitecture", "", "CPUArchitecture"),
     ("ModelNumber", "", "ModelNumber"),
+    ("RegionInfo", "", "RegionInfo"),
+    ("DeviceClass", "", "DeviceClass"),
+    ("DeviceColor", "", "DeviceColor"),
+    ("MarketingName", "", "MarketingName"),
+    ("CPUArchitecture", "", "CPUArchitecture"),
+    ("ChipID", "", "ChipID"),
+    ("BoardId", "", "BoardId"),
+    ("FirmwareVersion", "", "FirmwareVersion"),
+    ("HardwarePlatform", "", "HardwarePlatform"),
+    // --- Network / cellular (root domain) ---
     ("WiFiAddress", "", "WiFiAddress"),
+    ("EthernetAddress", "", "EthernetAddress"),
     ("BluetoothAddress", "", "BluetoothAddress"),
     (
         "InternationalMobileEquipmentIdentity",
         "",
         "InternationalMobileEquipmentIdentity",
     ),
+    ("MobileEquipmentIdentifier", "", "MobileEquipmentIdentifier"),
+    (
+        "InternationalMobileSubscriberIdentity",
+        "",
+        "InternationalMobileSubscriberIdentity",
+    ),
+    (
+        "IntegratedCircuitCardIdentity",
+        "",
+        "IntegratedCircuitCardIdentity",
+    ),
     ("PhoneNumber", "", "PhoneNumber"),
+    ("CarrierBundleInfoArray", "", "CarrierBundleInfoArray"),
+    // --- Locale / time ---
     ("TimeZone", "", "TimeZone"),
-    ("DeviceClass", "", "DeviceClass"),
+    ("TimeIntervalSince1970", "", "TimeIntervalSince1970"),
+    ("Language", "com.apple.international", "Language"),
+    ("Locale", "com.apple.international", "Locale"),
+    // --- Activation / security state ---
     ("ActivationState", "", "ActivationState"),
+    (
+        "ActivationStateAcknowledged",
+        "",
+        "ActivationStateAcknowledged",
+    ),
+    ("BrickState", "", "BrickState"),
+    ("DeveloperModeStatus", "", "DeveloperModeStatus"),
+    ("PasswordProtected", "", "PasswordProtected"),
+    ("TrustedHostAttached", "", "TrustedHostAttached"),
+    ("HasSiDP", "", "HasSiDP"),
+    // --- Storage (com.apple.disk_usage / mobile.disk_usage) ---
     (
         "TotalDiskCapacity (disk_usage)",
         "com.apple.disk_usage",
@@ -421,6 +483,21 @@ pub const LOCKDOWN_DIAGNOSTIC_GET_VALUES: &[(&str, &str, &str)] = &[
         "TotalDiskCapacity",
     ),
     (
+        "TotalSystemCapacity",
+        "com.apple.disk_usage",
+        "TotalSystemCapacity",
+    ),
+    (
+        "TotalSystemAvailable",
+        "com.apple.disk_usage",
+        "TotalSystemAvailable",
+    ),
+    (
+        "TotalDataCapacity",
+        "com.apple.disk_usage",
+        "TotalDataCapacity",
+    ),
+    (
         "TotalDataAvailable",
         "com.apple.disk_usage",
         "TotalDataAvailable",
@@ -430,33 +507,291 @@ pub const LOCKDOWN_DIAGNOSTIC_GET_VALUES: &[(&str, &str, &str)] = &[
         "com.apple.disk_usage",
         "AmountDataAvailable",
     ),
+    (
+        "AmountDataReserved",
+        "com.apple.disk_usage",
+        "AmountDataReserved",
+    ),
+    // --- iTunes / sync ---
+    (
+        "iTunesHasConnected",
+        "com.apple.mobile.iTunes",
+        "iTunesHasConnected",
+    ),
+    (
+        "MinITunesVersion",
+        "com.apple.mobile.iTunes",
+        "MinITunesVersion",
+    ),
+    // --- Battery (returns a dict) ---
     ("Mobile.battery", "com.apple.mobile.battery", ""),
 ];
 
-/// Full PEM text (with `-----BEGIN…-----` lines) for certs and root private key — encoded as plist **`<string>`** like **pymobiledevice3** / `plistlib` (not header-stripped **`<data>`** blobs).
-/// **`HostName`**, optional **`WiFiMACAddress`**, and **`RootPrivateKey`** in **`PairRecord`** match pymobiledevice3’s `Pair` message.
+/// Map a `(domain, key)` pair to a stable category title for the device-report formatter.
+/// Falls back to **Other** for any key that doesn't match a known category. Order returned
+/// from `device_report_section_order()` controls the section order in `format_lockdown_device_report`.
+pub fn device_report_section_for(domain: &str, key: &str) -> &'static str {
+    if domain == "com.apple.mobile.battery" {
+        return "Battery (com.apple.mobile.battery)";
+    }
+    if domain == "com.apple.disk_usage" || domain == "com.apple.mobile.disk_usage" {
+        return "Storage (disk_usage)";
+    }
+    if domain == "com.apple.international" {
+        return "Locale / time";
+    }
+    if domain == "com.apple.mobile.iTunes" {
+        return "iTunes / sync";
+    }
+    match key {
+        "DeviceName" | "ProductName" | "ProductType" | "ProductVersion" | "BuildVersion"
+        | "SerialNumber" | "UniqueDeviceID" | "HardwareModel" | "ModelNumber" | "RegionInfo"
+        | "DeviceClass" | "DeviceColor" | "MarketingName" | "CPUArchitecture" | "ChipID"
+        | "BoardId" | "FirmwareVersion" | "HardwarePlatform" => "Identity",
+        "WiFiAddress" | "EthernetAddress" | "BluetoothAddress"
+        | "InternationalMobileEquipmentIdentity"
+        | "MobileEquipmentIdentifier"
+        | "InternationalMobileSubscriberIdentity"
+        | "IntegratedCircuitCardIdentity"
+        | "PhoneNumber"
+        | "CarrierBundleInfoArray" => "Network / cellular",
+        "TimeZone" | "TimeIntervalSince1970" => "Locale / time",
+        "ActivationState" | "ActivationStateAcknowledged" | "BrickState"
+        | "DeveloperModeStatus" | "PasswordProtected" | "TrustedHostAttached" | "HasSiDP" => {
+            "Activation / security"
+        }
+        _ => "Other",
+    }
+}
+
+/// Stable order in which `format_lockdown_device_report` emits sections (sections that have no
+/// entries are skipped at render time, so this list is just the *priority* order).
+pub fn device_report_section_order() -> &'static [&'static str] {
+    &[
+        "Identity",
+        "Network / cellular",
+        "Locale / time",
+        "Activation / security",
+        "Storage (disk_usage)",
+        "iTunes / sync",
+        "Battery (com.apple.mobile.battery)",
+        "Other",
+    ]
+}
+
+/// Render a sectioned, human-friendly report for a batch of `GetValue` results.
+///
+/// Input rows are `(label, domain, key, Result<xml, error>)` where `xml` is the **raw**
+/// lockdownd `GetValue` reply (already passed through TLS/cleartext) and `error` is whatever
+/// the transport returned. Each row is parsed via [`format_lockdown_getvalue_display`] (so
+/// integers, booleans, MAC `<data>` blobs, and full battery `<dict>`s all render as plain
+/// text), grouped by [`device_report_section_for`], and emitted in the order returned by
+/// [`device_report_section_order`].
+///
+/// Storage byte counts (anything in `com.apple.disk_usage` / `mobile.disk_usage` whose value
+/// parses as an unsigned integer) are annotated with a human-readable `(~ X.XX GiB)` suffix.
+/// `GetProhibited` and other lockdown errors render as `Error: …` lines so the report stays
+/// useful even on locked / retail / MDM-supervised devices.
+pub fn format_lockdown_device_report(
+    rows: &[(&str, &str, &str, Result<String, String>)],
+) -> String {
+    use std::collections::BTreeMap;
+
+    // Section title -> ordered Vec of (label, formatted-value, is-multiline).
+    let mut sections: BTreeMap<&str, Vec<(String, String, bool)>> = BTreeMap::new();
+    let mut label_width: usize = 0;
+
+    for (label, domain, key, result) in rows {
+        let section = device_report_section_for(domain, key);
+        let display = match result {
+            Ok(xml) => {
+                let mut s = format_lockdown_getvalue_display(xml);
+                if (*domain == "com.apple.disk_usage" || *domain == "com.apple.mobile.disk_usage")
+                    && !s.contains('\n')
+                {
+                    if let Ok(n) = s.trim().parse::<u64>() {
+                        s = format!("{}  ({})", s, human_bytes(n));
+                    }
+                }
+                s
+            }
+            Err(e) => format!("Error: {}", e),
+        };
+        let multi = display.contains('\n');
+        if !multi {
+            label_width = label_width.max(label.chars().count());
+        }
+        sections
+            .entry(section)
+            .or_default()
+            .push(((*label).to_string(), display, multi));
+    }
+
+    let mut out = String::new();
+    for section in device_report_section_order() {
+        let Some(rows) = sections.remove(section) else {
+            continue;
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(section);
+        out.push('\n');
+        for _ in 0..section.chars().count() {
+            out.push('-');
+        }
+        out.push('\n');
+        for (label, value, multi) in rows {
+            if multi {
+                out.push_str(&format!("{}:\n{}\n", label, indent_lines(&value, "    ")));
+            } else {
+                out.push_str(&format!(
+                    "  {label:<width$} : {value}\n",
+                    label = label,
+                    width = label_width,
+                    value = value
+                ));
+            }
+        }
+    }
+    // Anything still in `sections` is a section title we didn't put in `device_report_section_order`.
+    for (section, rows) in sections {
+        if rows.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(section);
+        out.push('\n');
+        for _ in 0..section.chars().count() {
+            out.push('-');
+        }
+        out.push('\n');
+        for (label, value, multi) in rows {
+            if multi {
+                out.push_str(&format!("{}:\n{}\n", label, indent_lines(&value, "    ")));
+            } else {
+                out.push_str(&format!(
+                    "  {label:<width$} : {value}\n",
+                    label = label,
+                    width = label_width,
+                    value = value
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Format a byte count as e.g. `238.42 GiB` / `512 MiB` / `42 KiB` / `9 B`.
+/// Used by `format_lockdown_device_report` to annotate storage values.
+pub fn human_bytes(n: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    const TIB: u64 = GIB * 1024;
+    if n >= TIB {
+        format!("{:.2} TiB", n as f64 / TIB as f64)
+    } else if n >= GIB {
+        format!("{:.2} GiB", n as f64 / GIB as f64)
+    } else if n >= MIB {
+        format!("{:.1} MiB", n as f64 / MIB as f64)
+    } else if n >= KIB {
+        format!("{:.1} KiB", n as f64 / KIB as f64)
+    } else {
+        format!("{} B", n)
+    }
+}
+
+/// Render `pem` as a plist `<data>` (CFData) value at the given XML indent depth (in tabs),
+/// byte-compatible with `plistlib.dumps(...)`: open tag, base64 body wrapped at **68 characters**
+/// per line and prefixed with `indent`, closing tag — all newline-terminated. Trailing PEM
+/// whitespace is preserved (we keep `cert.public_bytes(Encoding.PEM)`'s final `\n`).
+///
+/// **Why CFData?** lockdownd expects `DeviceCertificate` / `HostCertificate` / `RootCertificate` /
+/// `RootPrivateKey` in the `Pair` request to be `CFData` — exactly what `plistlib` emits when the
+/// dict value is `bytes`, which is what pymobiledevice3 (and libimobiledevice) put there. Sending
+/// these as `<string>` parses but lockdownd rejects with `InvalidPairRecord` on the type mismatch.
+fn pem_as_data_value(pem: &str, indent: &str) -> String {
+    use base64::{engine::general_purpose, Engine as _};
+    let mut bytes = pem.as_bytes().to_vec();
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    let b64 = general_purpose::STANDARD.encode(&bytes);
+    let mut out = String::with_capacity(b64.len() + 64);
+    out.push_str("<data>\n");
+    let chars: Vec<char> = b64.chars().collect();
+    for chunk in chars.chunks(68) {
+        out.push_str(indent);
+        for &c in chunk {
+            out.push(c);
+        }
+        out.push('\n');
+    }
+    out.push_str(indent);
+    out.push_str("</data>");
+    out
+}
+
+/// **Wire format of the `Pair` request — must match `libimobiledevice/src/lockdown.c`
+/// (`lockdownd_do_pair`) byte-for-byte to avoid `InvalidPairRecord`.**
+///
+/// Crucial differences vs. an in-memory pair record (and vs. `pymobiledevice3.lockdown.pair`):
+///
+/// 1. **`RootPrivateKey` is stripped** from the wire `PairRecord`. libimobiledevice does
+///    `plist_dict_remove_item(request_pair_record, USERPREF_ROOT_PRIVATE_KEY_KEY)` right before
+///    sending. The root private key is a **host secret** — sending it to the device makes
+///    lockdownd reject the record. This rejection is *deferred*: the first `Pair` still returns
+///    `PairingDialogResponsePending` (lockdownd shows the Trust UI optimistically), but after the
+///    user accepts Trust the next `Pair` validates the record properly and returns
+///    `InvalidPairRecord`. This was the actual root cause of the post-Trust failures.
+///    `HostPrivateKey` is also stripped by libimobiledevice; we never put it in `PairRecord` in
+///    the first place, so there's nothing to remove.
+///
+/// 2. **No top-level `HostName`** — libimobiledevice's outer dict is just `Label`, `PairRecord`,
+///    `Request`, `ProtocolVersion`, `PairingOptions`. `pymobiledevice3` adds `HostName` but the
+///    canonical USB-pair flow on Linux (usbmuxd → idevicepair → libimobiledevice) does not.
+///    Lockdownd tolerates extra keys, but staying close to libimobiledevice avoids surprises.
+///
+/// 3. Cert fields stay as plist **`<data>`** (CFData / `bytes` in `plistlib`), not `<string>`:
+///    libimobiledevice writes them with `plist_new_data(...)`. CFData vs. CFString is a strict
+///    type check on the lockdownd side.
+///
+/// Top-level keys are emitted in **alphabetical order** to match `plistlib.dumps(sort_keys=True)`:
+/// `Label`, `PairRecord`, `PairingOptions`, `ProtocolVersion`, `Request`. The inner `PairRecord`
+/// dict is also alphabetical; `WiFiMACAddress` (when present, e.g. fetched cleartext before the
+/// `Pair`) sits after `SystemBUID` because `W` > `S`. CFPropertyList parses any order, but
+/// matching the canonical byte layout removes one variable when debugging.
+///
+/// `_host_name`, `_wifi_mac`, and `_root_private_pem` are accepted but **deliberately not** emitted
+/// on the wire (kept in the signature so callers don't have to change shape; the on-disk pair
+/// record format still includes them — `WiFiMACAddress` is added back by the *device* in its
+/// reply, and `RootPrivateKey` is needed locally for TLS).
+///
+/// **Why no `WiFiMACAddress` on the wire?** `libimobiledevice`'s `pair_record_generate`
+/// (`common/userpref.c`) builds the request `PairRecord` with **only** `{DeviceCertificate,
+/// HostCertificate, RootCertificate, HostID, SystemBUID}` — Wi-Fi MAC is **never** sent in a
+/// `Pair` request; the device populates it in the reply, and the host saves it locally. Sending
+/// it on the wire is one of the unknown extras that triggers post-Trust `InvalidPairRecord` on
+/// modern lockdownd.
 pub fn pair_plist(
-    host_name: &str,
+    _host_name: &str,
     host_id: &str,
     system_buid: &str,
-    wifi_mac: Option<&str>,
+    _wifi_mac: Option<&str>,
     device_pem: &str,
     host_pem: &str,
     root_pem: &str,
-    root_private_pem: &str,
+    _root_private_pem: &str,
 ) -> String {
-    let host_name_esc = xml_escape_string(host_name);
-    let device_esc = xml_escape_string(device_pem.trim());
-    let host_esc = xml_escape_string(host_pem.trim());
-    let root_esc = xml_escape_string(root_pem.trim());
-    let root_priv_esc = xml_escape_string(root_private_pem.trim());
-    let wifi_block = match wifi_mac {
-        Some(w) if !w.is_empty() => format!(
-            "\t\t<key>WiFiMACAddress</key><string>{}</string>\n",
-            xml_escape_string(w)
-        ),
-        _ => String::new(),
-    };
+    let device_data = pem_as_data_value(device_pem, "\t\t");
+    let host_data = pem_as_data_value(host_pem, "\t\t");
+    let root_data = pem_as_data_value(root_pem, "\t\t");
     format!(
         "\
 <?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -464,16 +799,16 @@ pub fn pair_plist(
 <plist version=\"1.0\">
 <dict>
 \t<key>Label</key><string>iphone-wasm</string>
-\t<key>HostName</key><string>{}</string>
 \t<key>PairRecord</key>
 \t<dict>
-\t\t<key>DeviceCertificate</key><string>{}</string>
-\t\t<key>HostCertificate</key><string>{}</string>
+\t\t<key>DeviceCertificate</key>
+\t\t{}
+\t\t<key>HostCertificate</key>
+\t\t{}
 \t\t<key>HostID</key><string>{}</string>
-\t\t<key>RootCertificate</key><string>{}</string>
-\t\t<key>RootPrivateKey</key><string>{}</string>
+\t\t<key>RootCertificate</key>
+\t\t{}
 \t\t<key>SystemBUID</key><string>{}</string>
-{}
 \t</dict>
 \t<key>PairingOptions</key>
 \t<dict>
@@ -483,14 +818,7 @@ pub fn pair_plist(
 \t<key>Request</key><string>Pair</string>
 </dict>
 </plist>",
-        host_name_esc,
-        device_esc,
-        host_esc,
-        host_id,
-        root_esc,
-        root_priv_esc,
-        system_buid,
-        wifi_block
+        device_data, host_data, host_id, root_data, system_buid
     )
 }
 
@@ -532,9 +860,9 @@ pub fn validate_pair_plist(
     host_pem: &str,
     root_pem: &str,
 ) -> String {
-    let device_esc = xml_escape_string(device_pem.trim());
-    let host_esc = xml_escape_string(host_pem.trim());
-    let root_esc = xml_escape_string(root_pem.trim());
+    let device_data = pem_as_data_value(device_pem, "\t\t");
+    let host_data = pem_as_data_value(host_pem, "\t\t");
+    let root_data = pem_as_data_value(root_pem, "\t\t");
     let wifi_block = match wifi_mac {
         Some(w) if !w.is_empty() => format!(
             "\t\t<key>WiFiMACAddress</key><string>{}</string>\n",
@@ -551,10 +879,13 @@ pub fn validate_pair_plist(
 \t<key>Label</key><string>iphone-wasm</string>
 \t<key>PairRecord</key>
 \t<dict>
-\t\t<key>DeviceCertificate</key><string>{}</string>
-\t\t<key>HostCertificate</key><string>{}</string>
+\t\t<key>DeviceCertificate</key>
+\t\t{}
+\t\t<key>HostCertificate</key>
+\t\t{}
 \t\t<key>HostID</key><string>{}</string>
-\t\t<key>RootCertificate</key><string>{}</string>
+\t\t<key>RootCertificate</key>
+\t\t{}
 \t\t<key>SystemBUID</key><string>{}</string>
 {}
 \t</dict>
@@ -562,10 +893,10 @@ pub fn validate_pair_plist(
     \t<key>Request</key><string>ValidatePair</string>
 </dict>
 </plist>",
-        device_esc,
-        host_esc,
+        device_data,
+        host_data,
         host_id,
-        root_esc,
+        root_data,
         system_buid,
         wifi_block
     )
@@ -592,6 +923,109 @@ mod tests {
     }
 
     #[test]
+    fn pair_plist_matches_libimobiledevice_shape() {
+        let pem = "-----BEGIN CERTIFICATE-----\nABCDEFGH\n-----END CERTIFICATE-----\n";
+        let key = "-----BEGIN PRIVATE KEY-----\nXYZ\n-----END PRIVATE KEY-----\n";
+        let xml = pair_plist(
+            "framework",
+            "host-id",
+            "system-buid",
+            Some("aa:bb:cc:dd:ee:ff"),
+            pem,
+            pem,
+            pem,
+            key,
+        );
+
+        // Cert fields must be CFData (`<data>`), not CFString (`<string>`).
+        for k in ["DeviceCertificate", "HostCertificate", "RootCertificate"] {
+            let key_tag = format!("<key>{}</key>", k);
+            let kpos = xml.find(&key_tag).unwrap_or_else(|| panic!("missing {}", k));
+            let next = xml[kpos + key_tag.len()..].trim_start();
+            assert!(
+                next.starts_with("<data>"),
+                "{} should be <data>, got: {}",
+                k,
+                &next[..next.len().min(40)]
+            );
+        }
+
+        // libimobiledevice strips RootPrivateKey from the wire PairRecord (it's a host secret) —
+        // sending it triggers `InvalidPairRecord` after the user accepts Trust on modern iOS.
+        // It must NOT appear anywhere in the Pair request.
+        assert!(
+            !xml.contains("RootPrivateKey"),
+            "RootPrivateKey must not be on the wire — libimobiledevice strips it"
+        );
+        assert!(
+            !xml.contains("HostPrivateKey"),
+            "HostPrivateKey must never be on the wire"
+        );
+        // Top-level HostName is not part of libimobiledevice's outer dict; we drop it too.
+        assert!(
+            !xml.contains("<key>HostName</key>"),
+            "Top-level HostName must not be on the wire"
+        );
+
+        let parsed: plist::Value = plist::from_bytes(xml.as_bytes()).expect("parse plist");
+        let dict = parsed.as_dictionary().unwrap();
+        let pair_record = dict.get("PairRecord").unwrap().as_dictionary().unwrap();
+
+        // Cert decodes back to the exact PEM bytes (with trailing newline preserved).
+        let dev_bytes = pair_record
+            .get("DeviceCertificate")
+            .unwrap()
+            .as_data()
+            .expect("CFData");
+        assert_eq!(dev_bytes, pem.as_bytes());
+
+        // String fields stay strings.
+        assert_eq!(
+            pair_record.get("HostID").unwrap().as_string().unwrap(),
+            "host-id"
+        );
+        // libimobiledevice never sends `WiFiMACAddress` in the request — the *device* puts it in
+        // the reply, and the host saves it locally. It must not appear in the wire PairRecord.
+        assert!(
+            pair_record.get("WiFiMACAddress").is_none(),
+            "WiFiMACAddress must not be on the wire (libimobiledevice never sends it)"
+        );
+
+        // Allowed PairRecord keys: canonical libimobiledevice request set, no extras.
+        let allowed = [
+            "DeviceCertificate",
+            "HostCertificate",
+            "HostID",
+            "RootCertificate",
+            "SystemBUID",
+        ];
+        for (k, _) in pair_record.iter() {
+            assert!(
+                allowed.contains(&k.as_str()),
+                "Unexpected PairRecord key: {}",
+                k
+            );
+        }
+
+        // Outer dict matches libimobiledevice (Label, PairRecord, PairingOptions, ProtocolVersion,
+        // Request). No HostName.
+        let outer_allowed = [
+            "Label",
+            "PairRecord",
+            "PairingOptions",
+            "ProtocolVersion",
+            "Request",
+        ];
+        for (k, _) in dict.iter() {
+            assert!(
+                outer_allowed.contains(&k.as_str()),
+                "Unexpected outer key: {}",
+                k
+            );
+        }
+    }
+
+    #[test]
     fn format_display_battery_dict() {
         let xml = r#"<plist><dict>
 <key>Value</key><dict>
@@ -603,5 +1037,74 @@ mod tests {
         assert!(s.contains("BatteryCurrentCapacity: 92"));
         assert!(s.contains("ExternalChargeCapable: true"));
         assert!(s.contains("IsCharging: false"));
+    }
+
+    #[test]
+    fn human_bytes_formats_units() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(2048), "2.0 KiB");
+        assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MiB");
+        assert!(human_bytes(256_000_000_000).ends_with("GiB"));
+    }
+
+    #[test]
+    fn report_groups_and_annotates_storage() {
+        let identity_xml = r#"<plist><dict><key>Value</key><string>iPhone15,3</string></dict></plist>"#;
+        let storage_xml = r#"<plist><dict><key>Value</key><integer>256000000000</integer></dict></plist>"#;
+        let battery_xml = r#"<plist><dict><key>Value</key><dict>
+<key>BatteryCurrentCapacity</key><integer>87</integer>
+<key>FullyCharged</key><false/>
+</dict></dict></plist>"#;
+        let prohibited = r#"<plist><dict><key>Error</key><string>GetProhibited</string></dict></plist>"#;
+
+        let rows: Vec<(&str, &str, &str, Result<String, String>)> = vec![
+            ("ProductType", "", "ProductType", Ok(identity_xml.into())),
+            ("PhoneNumber", "", "PhoneNumber", Ok(prohibited.into())),
+            (
+                "TotalDiskCapacity",
+                "com.apple.disk_usage",
+                "TotalDiskCapacity",
+                Ok(storage_xml.into()),
+            ),
+            (
+                "Mobile.battery",
+                "com.apple.mobile.battery",
+                "",
+                Ok(battery_xml.into()),
+            ),
+        ];
+
+        let s = format_lockdown_device_report(&rows);
+
+        // Sectioned output, in canonical order.
+        let id_pos = s.find("Identity\n").expect("Identity section present");
+        let net_pos = s
+            .find("Network / cellular\n")
+            .expect("Network section present");
+        let storage_pos = s
+            .find("Storage (disk_usage)\n")
+            .expect("Storage section present");
+        let bat_pos = s
+            .find("Battery (com.apple.mobile.battery)\n")
+            .expect("Battery section present");
+        assert!(id_pos < net_pos);
+        assert!(net_pos < storage_pos);
+        assert!(storage_pos < bat_pos);
+
+        // Identity values render as scalar key:value rows.
+        assert!(s.contains("ProductType"));
+        assert!(s.contains("iPhone15,3"));
+
+        // GetProhibited shows up but doesn't break formatting.
+        assert!(s.contains("Error: GetProhibited"));
+
+        // Storage byte counts get a human-readable suffix.
+        assert!(s.contains("256000000000"));
+        assert!(s.contains("GiB"));
+
+        // Battery dict expands as multi-line, indented sub-block.
+        assert!(s.contains("BatteryCurrentCapacity: 87"));
+        assert!(s.contains("FullyCharged: false"));
     }
 }

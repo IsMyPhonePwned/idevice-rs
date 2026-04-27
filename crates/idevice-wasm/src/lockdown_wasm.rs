@@ -1,21 +1,31 @@
-//! Lockdown over WebUSB: cleartext + optional **rustls** after `StartSession` when PEM keys are loaded from the pair-record plist.
+//! Lockdown over WebUSB: cleartext + optional **rustls** after `StartSession`, with two pair paths:
+//! - **Generated keys** (`mode = random` / `legacy`) → full `Pair` + Trust polling + TLS, like the CLI.
+//! - **Pair-record plist** (`mode = plist` or `pair_record_plist_xml` passed) → `StartSession` + TLS directly.
 
 use idevice_usb_core::lockdown_proto::{
-    format_lockdown_getvalue_display, start_session_enable_ssl, LOCKDOWN_DIAGNOSTIC_GET_VALUES,
-    LOCKDOWND_PORT,
+    format_lockdown_device_report, format_lockdown_getvalue_display, start_session_enable_ssl,
+    LOCKDOWN_DIAGNOSTIC_GET_VALUES, LOCKDOWND_PORT,
 };
+use idevice_usb_core::PairingIds;
 use wasm_bindgen::prelude::*;
 use web_sys::UsbDevice;
 
 use crate::crash_reports_wasm;
 
-use crate::lockdown_tls_wasm::{parse_tls_client_auth, parse_tls_sni};
-use crate::pair_record_plist::pair_record_from_xml_plist;
+use crate::lockdown_tls_wasm::{
+    parse_tls_client_auth, parse_tls_sni, LockdownTlsClientAuth, LockdownTlsSni,
+};
+use crate::pair_record_plist::{pair_record_from_xml_plist, pair_record_to_xml_plist};
+use crate::wasm_crypto::{generate_host_keys, WasmHostKeys};
 use crate::wasm_log;
 use crate::web_usb::{prepare_apple_usb, request_apple_device};
 use crate::web_usb_session::{
     pairing_ids_from_mode, pairing_ids_from_plist_xml, WebUsbLockdownPipe,
 };
+
+/// Default Trust-wait window for generated-key `Pair`: matches the CLI `--pair-trust-timeout-secs` default.
+const DEFAULT_PAIR_TIMEOUT_SECS: u32 = 120;
+const DEFAULT_PAIR_POLL_SECS: u32 = 4;
 
 fn trunc(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
@@ -23,6 +33,84 @@ fn trunc(s: &str, n: usize) -> String {
     } else {
         s.chars().take(n).collect::<String>() + "…"
     }
+}
+
+/// How the caller wants to get (keys, ids, should_pair) for a lockdown session.
+enum AuthSource {
+    /// Pre-existing pair record — `StartSession` directly, no `Pair`.
+    Plist { keys: WasmHostKeys, ids: PairingIds },
+    /// Generate fresh keys + new ids (random / legacy) — run `Pair` first.
+    Generate { ids: PairingIds },
+}
+
+fn auth_source(
+    mode: &str,
+    host_id: &str,
+    system_buid: &str,
+    pair_record_plist_xml: &str,
+) -> Result<AuthSource, JsValue> {
+    let plist_text = pair_record_plist_xml.trim();
+    if !plist_text.is_empty() {
+        let (keys, ids) =
+            pair_record_from_xml_plist(plist_text).map_err(|e| JsValue::from_str(&e))?;
+        return Ok(AuthSource::Plist { keys, ids });
+    }
+    let m = mode.trim();
+    match m {
+        "random" | "legacy" => {
+            let ids = pairing_ids_from_mode(m, host_id, system_buid)?;
+            Ok(AuthSource::Generate { ids })
+        }
+        "plist" => Err(JsValue::from_str(
+            "pair mode `plist` but no pair-record XML was provided",
+        )),
+        _ => Err(JsValue::from_str(
+            "pair mode must be random, legacy, or plist",
+        )),
+    }
+}
+
+/// Establish a lockdown session: optionally `Pair` (generated keys), then `StartSession` + TLS when
+/// **`EnableSessionSSL`** is set. Returns the `WasmHostKeys` used (for secondary service TLS).
+async fn establish_lockdown_session(
+    pipe: &mut WebUsbLockdownPipe<'_>,
+    src: AuthSource,
+    tls_client_auth: LockdownTlsClientAuth,
+    tls_sni: LockdownTlsSni,
+) -> Result<(WasmHostKeys, PairingIds, bool), JsValue> {
+    let (keys, ids, paired_here) = match src {
+        AuthSource::Plist { keys, ids } => {
+            wasm_log::info("lockdown: using pair-record plist — skipping Pair");
+            (keys, ids, false)
+        }
+        AuthSource::Generate { ids } => {
+            let keys = generate_host_keys().map_err(|e| JsValue::from_str(&e))?;
+            wasm_log::info("lockdown: Pair with freshly generated RSA keys (Trust prompt)…");
+            let _qt = pipe.query_type().await?;
+            let _ = pipe
+                .pair_with_trust_wait(&keys, &ids, DEFAULT_PAIR_TIMEOUT_SECS, DEFAULT_PAIR_POLL_SECS)
+                .await?;
+            wasm_log::info("lockdown: Pair OK — re-opening mux TCP before StartSession…");
+            pipe.reopen_lockdown_tcp().await?;
+            (keys, ids, true)
+        }
+    };
+    let _qt = pipe.query_type().await?;
+    let sess = pipe.start_session_cleartext(&ids).await?;
+    if sess.contains("<key>Error</key>") {
+        return Err(JsValue::from_str(&format!(
+            "StartSession rejected: {}",
+            trunc(&sess, 260).replace('\n', " ")
+        )));
+    }
+    if start_session_enable_ssl(&sess) {
+        wasm_log::info("lockdown: EnableSessionSSL — rustls handshake…");
+        pipe.upgrade_lockdown_tls(&keys, tls_client_auth, tls_sni)
+            .await?;
+    } else {
+        wasm_log::info("lockdown: StartSession did not enable SSL — continuing cleartext");
+    }
+    Ok((keys, ids, paired_here))
 }
 
 /// `QueryType` on lockdownd (cleartext). **`verbose`**: log mux/TCP details to the browser console.
@@ -90,56 +178,69 @@ pub async fn lockdown_fetch_with_plist_xml(
 
     if start_session_enable_ssl(&sess) {
         wasm_log::info("plist-fetch: EnableSessionSSL — rustls handshake…");
-        pipe
-            .upgrade_lockdown_tls(
-                &keys,
-                parse_tls_client_auth(tls_client_auth),
-                parse_tls_sni(tls_sni),
-            )
-            .await?;
+        pipe.upgrade_lockdown_tls(
+            &keys,
+            parse_tls_client_auth(tls_client_auth),
+            parse_tls_sni(tls_sni),
+        )
+        .await?;
     }
 
-    let mut out = String::from("=== Device info (pair-record plist) ===\n\n");
-    out.push_str("### QueryType\n");
-    out.push_str(&trunc(&qt, 4000));
-    out.push_str("\n\n### GetValue\n");
-
-    for (label, domain, key) in LOCKDOWN_DIAGNOSTIC_GET_VALUES.iter().take(12) {
+    let mut rows: Vec<(&str, &str, &str, Result<String, String>)> =
+        Vec::with_capacity(LOCKDOWN_DIAGNOSTIC_GET_VALUES.len());
+    for (label, domain, key) in LOCKDOWN_DIAGNOSTIC_GET_VALUES {
         wasm_log::info(&format!("plist-fetch: GetValue — {label}…"));
-        match pipe.get_value_cleartext(domain, key).await {
-            Ok(xml) => {
-                let summary = trunc(&format_lockdown_getvalue_display(&xml), 6000);
-                out.push_str(&format!("- {label}: {summary}\n"));
-                wasm_log::debug_verbose(
-                    verbose,
-                    &format!("plist-fetch: {label} raw XML {} bytes", xml.len()),
-                );
-            }
-            Err(e) => {
-                out.push_str(&format!("- {label}: ERROR {e:?}\n"));
-                wasm_log::warn(&format!("plist-fetch: GetValue {label} failed: {e:?}"));
-            }
+        let r = pipe
+            .get_value_cleartext(domain, key)
+            .await
+            .map_err(|e| format!("{e:?}"));
+        if let Ok(ref xml) = r {
+            wasm_log::debug_verbose(
+                verbose,
+                &format!("plist-fetch: {label} raw XML {} bytes", xml.len()),
+            );
+        } else if let Err(ref e) = r {
+            wasm_log::warn(&format!("plist-fetch: GetValue {label} failed: {e}"));
         }
+        rows.push((label, domain, key, r));
     }
 
-    wasm_log::info("plist-fetch: GetValue — com.apple.mobile.battery…");
-    match pipe.get_value_cleartext("com.apple.mobile.battery", "").await {
-        Ok(xml) => {
-            let summary = trunc(&format_lockdown_getvalue_display(&xml), 8000);
-            out.push_str(&format!("\n### Battery\n{summary}\n"));
-        }
-        Err(e) => {
-            out.push_str(&format!("\n### Battery\nERROR: {e:?}\n"));
-            wasm_log::warn(&format!("plist-fetch: battery GetValue failed: {e:?}"));
-        }
-    }
+    let mut out = String::from("=== Device report (pair-record plist) ===\n\n");
+    out.push_str("QueryType\n---------\n");
+    out.push_str(&trunc(&qt, 4000));
+    out.push_str("\n\n");
+    out.push_str(&format_lockdown_device_report(&rows));
 
     wasm_log::info("plist-fetch: finished OK");
     Ok(out)
 }
 
-/// `QueryType` → **`StartSession`** → **`GetValue`** battery domain. When **`EnableSessionSSL`**, pass **`pair_record_plist_xml`**
-/// (full XML plist with PEM keys) so WASM can run lockdown TLS.
+/// Pair with **freshly generated** RSA keys (random / legacy ids), wait for Trust on the device,
+/// and return the resulting pair-record **XML plist** (HostID / SystemBUID / PEM keys) so the page
+/// can save it for subsequent `StartSession` + TLS without re-prompting the user.
+#[wasm_bindgen(js_name = lockdownPair)]
+pub async fn lockdown_pair(
+    device: UsbDevice,
+    mode: &str,
+    verbose: bool,
+) -> Result<String, JsValue> {
+    wasm_log::info(&format!(
+        "pair: mode={} — generating host keys + Pair + Trust polling",
+        mode.trim()
+    ));
+    let ids = pairing_ids_from_mode(mode, "", "")?;
+    let keys = generate_host_keys().map_err(|e| JsValue::from_str(&e))?;
+    let eps = prepare_apple_usb(&device).await?;
+    let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
+    let _qt = pipe.query_type().await?;
+    let _ = pipe
+        .pair_with_trust_wait(&keys, &ids, DEFAULT_PAIR_TIMEOUT_SECS, DEFAULT_PAIR_POLL_SECS)
+        .await?;
+    Ok(pair_record_to_xml_plist(&keys, &ids))
+}
+
+/// `QueryType` → optional `Pair` (generated keys) → `StartSession` → optional TLS → `GetValue battery`.
+/// Pass **`pair_record_plist_xml`** to reuse an existing pair record; otherwise keys are generated based on `mode`.
 #[wasm_bindgen(js_name = lockdownBatteryPickDevice)]
 pub async fn lockdown_battery_pick_device(
     mode: &str,
@@ -176,40 +277,20 @@ pub async fn lockdown_battery(
     tls_sni: &str,
 ) -> Result<String, JsValue> {
     wasm_log::info(&format!(
-        "lockdown: battery — pair mode={} (USB + mux + QueryType + StartSession + GetValue)",
-        mode.trim()
+        "lockdown: battery — pair mode={} plist={}B",
+        mode.trim(),
+        pair_record_plist_xml.trim().len()
     ));
-    let ids = pairing_ids_from_mode(mode, host_id, system_buid)?;
+    let src = auth_source(mode, host_id, system_buid, pair_record_plist_xml)?;
     let eps = prepare_apple_usb(&device).await?;
     let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
-    let _qt = pipe.query_type().await?;
-    let sess = pipe.start_session_cleartext(&ids).await?;
-    if start_session_enable_ssl(&sess) {
-        let t = pair_record_plist_xml.trim();
-        if t.is_empty() {
-            return Ok(format!(
-                "StartSession requested TLS (EnableSessionSSL). Pass the full XML pair-record plist text as `pair_record_plist_xml` (including HostPrivateKey, HostCertificate, RootCertificate, RootPrivateKey), or use the native idevice CLI.\n\n--- StartSession (truncated) ---\n{}",
-                trunc(&sess, 2000)
-            ));
-        }
-        let (keys, _) = match pair_record_from_xml_plist(t) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(format!(
-                    "EnableSessionSSL — could not parse pair-record PEM keys from XML plist: {}\n\n--- StartSession (truncated) ---\n{}",
-                    e,
-                    trunc(&sess, 2000)
-                ));
-            }
-        };
-        pipe
-            .upgrade_lockdown_tls(
-                &keys,
-                parse_tls_client_auth(tls_client_auth),
-                parse_tls_sni(tls_sni),
-            )
-            .await?;
-    }
+    let (_keys, _ids, _paired) = establish_lockdown_session(
+        &mut pipe,
+        src,
+        parse_tls_client_auth(tls_client_auth),
+        parse_tls_sni(tls_sni),
+    )
+    .await?;
     let xml = pipe.get_value_cleartext("com.apple.mobile.battery", "").await?;
     Ok(format!(
         "=== Battery (GetValue) ===\n\n{}",
@@ -217,7 +298,7 @@ pub async fn lockdown_battery(
     ))
 }
 
-/// Same as battery, then diagnostic **`GetValue`** calls. Use **`pair_record_plist_xml`** when the device requires TLS.
+/// Same as battery, then the diagnostic `GetValue` batch.
 #[wasm_bindgen(js_name = lockdownDiagnosticsPickDevice)]
 pub async fn lockdown_diagnostics_pick_device(
     mode: &str,
@@ -254,66 +335,59 @@ pub async fn lockdown_diagnostics(
     tls_sni: &str,
 ) -> Result<String, JsValue> {
     wasm_log::info(&format!(
-        "lockdown: diagnostics — pair mode={} (GetValue batch)",
-        mode.trim()
+        "lockdown: diagnostics — pair mode={} plist={}B",
+        mode.trim(),
+        pair_record_plist_xml.trim().len()
     ));
-    let ids = pairing_ids_from_mode(mode, host_id, system_buid)?;
+    let src = auth_source(mode, host_id, system_buid, pair_record_plist_xml)?;
     let eps = prepare_apple_usb(&device).await?;
     let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
-    let _qt = pipe.query_type().await?;
-    let sess = pipe.start_session_cleartext(&ids).await?;
-    if start_session_enable_ssl(&sess) {
-        let t = pair_record_plist_xml.trim();
-        if t.is_empty() {
-            return Ok(format!(
-                "StartSession requested TLS (EnableSessionSSL). Pass the full XML pair-record plist as `pair_record_plist_xml`, or use the native idevice CLI.\n\n--- StartSession (truncated) ---\n{}",
-                trunc(&sess, 2000)
-            ));
-        }
-        let (keys, _) = match pair_record_from_xml_plist(t) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(format!(
-                    "EnableSessionSSL — could not parse pair-record PEM keys: {}\n\n--- StartSession (truncated) ---\n{}",
-                    e,
-                    trunc(&sess, 2000)
-                ));
-            }
-        };
-        pipe
-            .upgrade_lockdown_tls(
-                &keys,
-                parse_tls_client_auth(tls_client_auth),
-                parse_tls_sni(tls_sni),
-            )
-            .await?;
-    }
-    let mut out = String::from("=== Diagnostics (GetValue) ===\n");
-    out.push_str(&format!(
-        "({} queries — not Apple sysdiagnose)\n",
-        LOCKDOWN_DIAGNOSTIC_GET_VALUES.len()
-    ));
+    let (_keys, _ids, _paired) = establish_lockdown_session(
+        &mut pipe,
+        src,
+        parse_tls_client_auth(tls_client_auth),
+        parse_tls_sni(tls_sni),
+    )
+    .await?;
+    let mut rows: Vec<(&str, &str, &str, Result<String, String>)> =
+        Vec::with_capacity(LOCKDOWN_DIAGNOSTIC_GET_VALUES.len());
+    let mut prohibited = 0usize;
+    let mut errors = 0usize;
     for (label, domain, key) in LOCKDOWN_DIAGNOSTIC_GET_VALUES {
         wasm_log::info(&format!("diagnostics: GetValue — {label}…"));
-        match pipe.get_value_cleartext(domain, key).await {
-            Ok(xml) => {
-                let block = format_lockdown_getvalue_display(&xml);
-                let block = trunc(&block, 10000);
-                out.push_str(&format!("\n── {} ──\n{}\n", label, block));
-            }
-            Err(e) => {
-                out.push_str(&format!("\n── {} ──\nERROR: {:?}\n", label, e));
-            }
+        let r = pipe
+            .get_value_cleartext(domain, key)
+            .await
+            .map_err(|e| format!("{e:?}"));
+        match &r {
+            Ok(_) => {}
+            Err(e) if e.contains("GetProhibited") => prohibited += 1,
+            Err(_) => errors += 1,
         }
+        rows.push((label, domain, key, r));
     }
+
+    let mut out = String::from("=== Diagnostics (lockdown GetValue snapshot) ===\n");
+    out.push_str(&format!(
+        "{n} queries — not Apple sysdiagnose. {ok} ok / {prohib} GetProhibited / {err} other errors.\n\n",
+        n = rows.len(),
+        ok = rows.len() - prohibited - errors,
+        prohib = prohibited,
+        err = errors
+    ));
+    out.push_str(&format_lockdown_device_report(&rows));
     Ok(out)
 }
 
-/// **`crashreportmover`** → **`ping`**, then **`crashreportcopymobile`** AFC — same sequence as **`idevicecrashreport`**.
-/// Returns a JS **Array** of `{ name: string, data: Uint8Array }`. Requires a **full** XML pair-record plist (PEM keys) and **`EnableSessionSSL`**.
+/// `crashreportmover` + AFC crash report copy. Works with either a pre-existing pair-record plist or
+/// with generated keys (pair mode `random` / `legacy`) — the latter runs a full `Pair` + Trust flow first.
 #[wasm_bindgen(js_name = lockdownCrashReports)]
+#[allow(clippy::too_many_arguments)]
 pub async fn lockdown_crash_reports(
     device: UsbDevice,
+    mode: &str,
+    host_id: &str,
+    system_buid: &str,
     pair_record_plist_xml: &str,
     verbose: bool,
     tls_client_auth: &str,
@@ -324,6 +398,9 @@ pub async fn lockdown_crash_reports(
 ) -> Result<JsValue, JsValue> {
     crash_reports_wasm::crash_reports_flow(
         device,
+        mode,
+        host_id,
+        system_buid,
         pair_record_plist_xml,
         verbose,
         tls_client_auth,
@@ -338,9 +415,10 @@ pub async fn lockdown_crash_reports(
 #[wasm_bindgen(js_name = lockdownCrashReportsInfo)]
 pub fn lockdown_crash_reports_info() -> String {
     format!(
-        "WASM: `lockdownCrashReports` runs crashreportmover + AFC over extra mux pseudo-TCP streams (same as the native tool). \
-         Load a full pair-record XML plist, set TLS client cert / SNI like Battery, then call with keep/filter/removeAll flags. \
-         Output is an array of {{ name, data }}. Lockdownd port: {}.",
+        "WASM crashreportmover + AFC over extra mux pseudo-TCP streams. \
+         Choose pair mode `random`/`legacy` (Pair + Trust on first run, then StartSession + TLS) \
+         or pass a saved pair-record XML plist. Output is an array of {{ name, data }}. \
+         Lockdownd port: {}.",
         LOCKDOWND_PORT
     )
 }

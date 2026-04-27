@@ -15,6 +15,10 @@ idevice-usb-core = { path = "../idevice-usb-core" }
 rusb = "0.9"
 
 plist = "1"
+# Re-uses the same `time` crate version as `rcgen` / `plist` so we can pin the
+# `NotBefore` / `NotAfter` window of the generated `Pair` certs to a fixed
+# 2010-01-01 → 2068-01-01 range (matches pymobiledevice3 / libimobiledevice).
+time = { version = "0.3", default-features = false, features = ["macros"] }
 rcgen = { version = "0.12", features = ["x509-parser"] }
 pem = "3"
 rsa = { version = "0.9", features = ["sha2"] }

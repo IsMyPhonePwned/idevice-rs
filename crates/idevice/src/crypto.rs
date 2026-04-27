@@ -5,10 +5,21 @@ use rcgen::{
     KeyUsagePurpose, RemoteKeyPair, SignatureAlgorithm,
 };
 use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey, EncodeRsaPublicKey};
-use rsa::pkcs8::{
-    DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding,
-};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, LineEnding};
 use rsa::{RsaPrivateKey, RsaPublicKey};
+use time::{Duration, OffsetDateTime};
+
+/// `NotBefore` clock-skew margin — matches **pymobiledevice3** (`now - timedelta(minutes=1)`).
+/// rcgen defaults `NotBefore` to **`now()`**, which sits a few seconds in the future from the
+/// device's clock and can flip lockdownd to `InvalidPairRecord` right after the user taps Trust.
+const PAIR_CERT_NOT_BEFORE_SKEW: Duration = Duration::minutes(1);
+/// Validity span — pymobiledevice3 uses **`365 * 10` days** (`get_validity_bounds(years=10)`).
+const PAIR_CERT_VALIDITY: Duration = Duration::days(365 * 10);
+
+fn pair_cert_validity_window() -> (OffsetDateTime, OffsetDateTime) {
+    let now = OffsetDateTime::now_utc();
+    (now - PAIR_CERT_NOT_BEFORE_SKEW, now + PAIR_CERT_VALIDITY)
+}
 
 #[derive(Clone)]
 pub struct HostKeys {
@@ -64,19 +75,22 @@ fn sha256_cert_prefix(der: &[u8]) -> String {
     )
 }
 
-/// id-ce-basicConstraints (2.5.29.19), end-entity: **empty `SEQUENCE`** (`30 00`) — **cryptography** /
-/// **pymobiledevice3** `BasicConstraints(ca=False)`.
+/// id-ce-basicConstraints (2.5.29.19), end-entity: **empty `SEQUENCE`** (`30 00`) — matches the DER
+/// shape Python `cryptography` produces for `BasicConstraints(ca=False)` (no `pathLenConstraint`).
 const BASIC_CONSTRAINTS_END_ENTITY_DER: &[u8] = &[0x30, 0x00];
-/// Same extension, **CA** root: `SEQUENCE { cA BOOLEAN TRUE }` (`30 03 01 01 ff`) — **pymobiledevice3** root has
-/// **only** this (no SubjectKeyIdentifier). rcgen’s `IsCa::Ca` adds an SKI Apple may reject during `Pair` validation.
+/// Same extension, **CA** root: `SEQUENCE { cA BOOLEAN TRUE }` (`30 03 01 01 ff`). pymobiledevice3
+/// only adds `BasicConstraints(ca=True)` to the root (no `SubjectKeyIdentifier`) — rcgen's
+/// `IsCa::Ca` would also emit an SKI which Apple's strict validator can reject during `Pair`.
 const BASIC_CONSTRAINTS_CA_DER: &[u8] = &[0x30, 0x03, 0x01, 0x01, 0xFF];
 const OID_BASIC_CONSTRAINTS: &[u64] = &[2, 5, 29, 19];
 /// id-ce-subjectKeyIdentifier (2.5.29.14); extnValue is **`OCTET STRING`** (`04 14` + 20 bytes) per RFC 5280.
 const OID_SUBJECT_KEY_IDENTIFIER: &[u64] = &[2, 5, 29, 14];
 
-/// Root + host + device certs shaped like [`pymobiledevice3.ca`](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/ca.py):
-/// empty DNs, serial **1** on each cert, root **BC-only CA** (custom ext, no SKI), host leaf **KU + BC** (custom ext),
-/// device leaf **KU + BC + SKI** (custom exts) with SKI = **SHA-1(PKCS#1 RSAPublicKey DER)** like **cryptography**.
+/// Root + host + device certs shaped exactly like [`pymobiledevice3.ca`](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/ca.py):
+/// empty issuer / subject DNs, **serial 1** on every cert, **`NotBefore = now - 1 min`** (clock-skew
+/// margin) / **`NotAfter = now + 10 years`**, root carries **`BasicConstraints(CA=TRUE)`** only,
+/// host leaf carries **`BC(CA=FALSE) + KU(digitalSignature, keyEncipherment)`**, device leaf carries
+/// **`BC(CA=FALSE) + KU + SubjectKeyIdentifier`** (SKI = SHA-1 of the device's PKCS#1 RSAPublicKey DER).
 pub fn generate_host_keys() -> Result<HostKeys, String> {
     crate::console_log!(
         "[crypto] Generating Root and Host RSA-2048 Keys (pymobiledevice3-style chain)…"
@@ -84,12 +98,19 @@ pub fn generate_host_keys() -> Result<HostKeys, String> {
     let (root_key_pair, root_private_pem, root_private_der) = generate_rsa_keypair()?;
     let (host_key_pair, private_pem, private_der) = generate_rsa_keypair()?;
 
+    let (not_before, not_after) = pair_cert_validity_window();
+
     let mut root_params = CertificateParams::default();
     root_params.distinguished_name = DistinguishedName::new();
     root_params.alg = cert_alg();
-    root_params.serial_number = Some(1u64.into());
+    // libimobiledevice (`common/userpref.c`) sets `ASN1_INTEGER_set(sn, 0)` for **all three**
+    // pair certs. usbmuxd-saved working pair records confirm `Serial = 0`. RFC 5280 frowns on
+    // serial=0 but lockdownd accepts it (and only it, on some iOS releases) — match canonically.
+    root_params.serial_number = Some(0u64.into());
     root_params.is_ca = IsCa::NoCa;
     root_params.key_usages = Vec::new();
+    root_params.not_before = not_before;
+    root_params.not_after = not_after;
     let mut root_bc =
         CustomExtension::from_oid_content(OID_BASIC_CONSTRAINTS, BASIC_CONSTRAINTS_CA_DER.to_vec());
     root_bc.set_criticality(true);
@@ -107,12 +128,14 @@ pub fn generate_host_keys() -> Result<HostKeys, String> {
     let mut host_params = CertificateParams::default();
     host_params.distinguished_name = DistinguishedName::new();
     host_params.alg = cert_alg();
-    host_params.serial_number = Some(1u64.into());
+    host_params.serial_number = Some(0u64.into());
     host_params.is_ca = IsCa::NoCa;
     host_params.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,
     ];
+    host_params.not_before = not_before;
+    host_params.not_after = not_after;
     let mut host_bc = CustomExtension::from_oid_content(
         OID_BASIC_CONSTRAINTS,
         BASIC_CONSTRAINTS_END_ENTITY_DER.to_vec(),
@@ -152,6 +175,15 @@ pub fn generate_host_keys() -> Result<HostKeys, String> {
     Ok(keys)
 }
 
+/// Bridges the device's RSA public key (PKCS#1 `RSAPublicKey` DER — **modulus + exponent only**,
+/// no `AlgorithmIdentifier`) into [`rcgen`] so it can sit in the device leaf's `SubjectPublicKeyInfo`.
+///
+/// **Bug history:** earlier we passed a full SPKI DER (`to_public_key_der()`) here. rcgen wraps the
+/// bytes returned by [`RemoteKeyPair::public_key`] into the cert's SPKI itself, so giving it a SPKI
+/// produced a **double-wrapped** SPKI in the device cert (`SPKI { rsaEncryption, BIT STRING {
+/// SPKI { … } } }`). The cert parsed but lockdownd rejected it as `InvalidPairRecord` after
+/// the user accepted Trust. Match `pymobiledevice3.x509.CertificateBuilder.public_key()` semantics:
+/// raw `RSAPublicKey` bytes only.
 struct IPhonePubKey(Vec<u8>);
 impl RemoteKeyPair for IPhonePubKey {
     fn public_key(&self) -> &[u8] {
@@ -174,18 +206,22 @@ pub fn build_device_certificate(
         .or_else(|_| RsaPublicKey::from_pkcs1_pem(iphone_pub_key_pem))
         .map_err(|e| format!("Failed to parse iPhone Public Key: {:?}", e))?;
 
-    let spki_der = device_pub
-        .to_public_key_der()
-        .map_err(|e| format!("Failed to create SPKI DER: {:?}", e))?;
-    let spki_len = spki_der.as_bytes().len();
-    let dummy_keypair = KeyPair::from_remote(Box::new(IPhonePubKey(spki_der.into_vec())))
+    let raw_pkcs1 = device_pub
+        .to_pkcs1_der()
+        .map_err(|e| format!("Failed to encode device public key as PKCS#1 DER: {:?}", e))?;
+    let raw_pkcs1_bytes = raw_pkcs1.as_bytes().to_vec();
+    let raw_pkcs1_len = raw_pkcs1_bytes.len();
+    let dummy_keypair = KeyPair::from_remote(Box::new(IPhonePubKey(raw_pkcs1_bytes)))
         .map_err(|e| format!("Failed to wrap iPhone key: {:?}", e))?;
 
     let mut device_params = CertificateParams::default();
     device_params.distinguished_name = DistinguishedName::new();
     device_params.alg = cert_alg();
-    device_params.serial_number = Some(1u64.into());
+    device_params.serial_number = Some(0u64.into());
     device_params.is_ca = IsCa::NoCa;
+    let (not_before, not_after) = pair_cert_validity_window();
+    device_params.not_before = not_before;
+    device_params.not_after = not_after;
     let pkcs1_der = device_pub
         .to_pkcs1_der()
         .map_err(|e| format!("Device PKCS#1 DER (for SKI): {:?}", e))?;
@@ -222,9 +258,9 @@ pub fn build_device_certificate(
         .map_err(|e| format!("Failed to sign device cert: {:?}", e))?;
     if crate::diagnostic_trace_enabled() {
         crate::console_log!(
-            "[crypto] Device leaf PEM: {} bytes (device SPKI {} bytes)",
+            "[crypto] Device leaf PEM: {} bytes (raw RSAPublicKey {} bytes)",
             pem.len(),
-            spki_len
+            raw_pkcs1_len
         );
     }
     Ok(pem)

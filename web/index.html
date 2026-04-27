@@ -3,140 +3,543 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>idevice-rs (WASM + WebUSB)</title>
+  <title>idevice-rs — WASM + WebUSB demo</title>
   <style>
     :root {
       --bg: #0c0e12;
+      --bg-2: #0a0c10;
       --card: #141820;
       --line: #2a3044;
+      --line-2: #1d2230;
       --text: #e8eaf0;
       --muted: #8b93a8;
       --accent: #34d399;
-      --font: system-ui, sans-serif;
-      --mono: ui-monospace, monospace;
+      --accent-soft: rgba(52, 211, 153, 0.12);
+      --accent-line: rgba(52, 211, 153, 0.4);
+      --warn: #f5a524;
+      --danger: #f87171;
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
-    body { margin: 0; font-family: var(--font); color: var(--text); background: var(--bg); padding: 1.25rem; line-height: 1.45; }
-    main { max-width: 28rem; margin: 0 auto; }
-    h1 { font-size: 1.2rem; margin: 0 0 0.5rem; }
-    p.sub { color: var(--muted); font-size: 0.86rem; margin: 0 0 1rem; }
-    section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.85rem; }
-    h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 0.5rem; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--text);
+      background: radial-gradient(1200px 600px at 50% -200px, #1a2030, var(--bg)) fixed;
+      padding: 1.25rem;
+      line-height: 1.45;
+    }
+    main { max-width: 44rem; margin: 0 auto; }
+    header.app-head { display: flex; align-items: baseline; gap: 0.6rem; margin: 0 0 0.4rem; flex-wrap: wrap; }
+    header.app-head h1 { font-size: 1.3rem; margin: 0; }
+    header.app-head .tag { font-size: 0.78rem; color: var(--muted); }
+    header.app-head a { color: var(--muted); text-decoration: none; border-bottom: 1px dotted var(--line); }
+    header.app-head a:hover { color: var(--accent); border-color: var(--accent-line); }
+
+    /* Status pill bar */
+    .status-bar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      gap: 0.5rem;
+      padding: 0.6rem 0.75rem;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      margin: 0 0 0.85rem;
+    }
+    .status-item { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+    .status-item .pill {
+      flex: 0 0 auto;
+      width: 0.55rem; height: 0.55rem; border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 3px rgba(139, 147, 168, 0.15);
+    }
+    .status-item.ok .pill { background: var(--accent); box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+    .status-item.warn .pill { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.18); }
+    .status-item .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .status-item .value { font-size: 0.86rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Step / sections */
+    section.step {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.85rem;
+      position: relative;
+    }
+    section.step h2 {
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin: 0 0 0.6rem;
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    section.step h2 .num {
+      display: inline-flex;
+      align-items: center; justify-content: center;
+      width: 1.3rem; height: 1.3rem; border-radius: 50%;
+      font-size: 0.72rem; font-weight: 700;
+      background: var(--accent-soft); color: var(--accent);
+      border: 1px solid var(--accent-line);
+    }
+    section.step h2 .ttl { color: var(--text); letter-spacing: 0.04em; }
+
+    /* Form rows */
     label { font-size: 0.88rem; cursor: pointer; display: block; margin: 0.25rem 0; }
-    input[type="text"] { width: 100%; max-width: 22rem; padding: 0.35rem 0.5rem; border-radius: 6px; border: 1px solid var(--line); background: #0a0c10; color: var(--text); font: inherit; }
-    .row { margin: 0.35rem 0; }
-    .btn { font: inherit; font-weight: 600; font-size: 0.82rem; padding: 0.4rem 0.7rem; margin: 0.2rem 0.35rem 0.2rem 0; border-radius: 8px; border: 1px solid var(--line); background: #1a1f2c; color: var(--text); cursor: pointer; }
-    .btn:hover { border-color: var(--accent); color: var(--accent); }
-    .btn-primary { background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.4); color: var(--accent); }
-    pre#out { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: #07080c; border: 1px solid var(--line); font-family: var(--mono); font-size: 0.74rem; white-space: pre-wrap; word-break: break-word; max-height: 24rem; overflow: auto; color: #c4c8d4; }
+    label.inline { display: inline-flex; align-items: center; gap: 0.4rem; margin-right: 0.85rem; }
+    .row { margin: 0.4rem 0; }
+    .row.two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem;
+    }
+    @media (max-width: 38rem) { .row.two-col { grid-template-columns: 1fr; } }
+    input[type="text"], select, input[type="search"] {
+      width: 100%;
+      padding: 0.4rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--bg-2);
+      color: var(--text);
+      font: inherit;
+    }
+    input[type="text"]:focus, select:focus, input[type="search"]:focus, .btn:focus-visible {
+      outline: 2px solid var(--accent-line);
+      outline-offset: 1px;
+    }
     input[type="checkbox"] { accent-color: var(--accent); }
     input[type="file"] { font-size: 0.82rem; color: var(--muted); max-width: 100%; margin: 0.25rem 0 0.35rem; }
-    .plist-hint { font-size: 0.78rem; color: var(--muted); margin: 0.15rem 0 0.35rem; }
-    details.toggle-block { margin: 0 0 0.75rem; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.65rem; background: #0e1016; }
-    details.toggle-block > summary { cursor: pointer; font-size: 0.82rem; color: var(--muted); user-select: none; list-style-position: outside; }
-    details.toggle-block[open] > summary { margin-bottom: 0.4rem; color: var(--text); }
-    details.toggle-block .sub { margin-top: 0.35rem; }
+
+    /* Buttons */
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.4rem 0 0.2rem; }
+    .btn {
+      font: inherit;
+      font-weight: 600;
+      font-size: 0.84rem;
+      padding: 0.45rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #1a1f2c;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: border-color 120ms, color 120ms, background-color 120ms;
+    }
+    .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .btn-primary { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+    .btn-ghost { background: transparent; border-color: var(--line-2); color: var(--muted); font-weight: 500; }
+    .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
+    .btn-danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn[data-running="1"] { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+    .btn .spinner {
+      display: none;
+      width: 0.85rem; height: 0.85rem;
+      border: 2px solid var(--accent-line);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    .btn[data-running="1"] .spinner { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .hint { font-size: 0.78rem; color: var(--muted); margin: 0.25rem 0; }
+    .hint.ok { color: var(--accent); }
+    .hint.warn { color: var(--warn); }
+    .hint.danger { color: var(--danger); }
+
+    details.toggle-block {
+      margin: 0.5rem 0;
+      border: 1px solid var(--line-2);
+      border-radius: 8px;
+      padding: 0.4rem 0.6rem;
+      background: rgba(255, 255, 255, 0.015);
+    }
+    details.toggle-block > summary {
+      cursor: pointer;
+      font-size: 0.8rem;
+      color: var(--muted);
+      user-select: none;
+    }
+    details.toggle-block[open] > summary { color: var(--text); margin-bottom: 0.35rem; }
+    details.toggle-block .hint { margin-top: 0.3rem; }
+
+    /* Output log */
+    .out-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.6rem 0.75rem;
+    }
+    .out-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.4rem;
+      margin-bottom: 0.4rem;
+    }
+    .out-head h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0; }
+    .out-head .actions { display: flex; gap: 0.3rem; }
+    pre#out {
+      margin: 0;
+      padding: 0.7rem 0.8rem;
+      border-radius: 8px;
+      background: #07080c;
+      border: 1px solid var(--line-2);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 28rem;
+      overflow: auto;
+      color: #c4c8d4;
+    }
+    pre#out .ts { color: #5a6378; }
+    pre#out .info { color: #c4c8d4; }
+    pre#out .ok { color: var(--accent); }
+    pre#out .warn { color: var(--warn); }
+    pre#out .err { color: var(--danger); }
+    pre#out .step { color: #93a4ff; }
+
+    /* Crash reports list */
+    .files-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      margin-top: 0.4rem;
+    }
+    .files-table th, .files-table td {
+      text-align: left;
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid var(--line-2);
+    }
+    .files-table th { font-weight: 600; color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .files-table td.size { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .files-table td.name { font-family: var(--mono); font-size: 0.78rem; word-break: break-all; }
+    .files-table td.actions { white-space: nowrap; text-align: right; }
+    .files-empty { color: var(--muted); font-size: 0.84rem; padding: 0.5rem 0.2rem; }
+
+    /* Device snapshot grid */
+    .device-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+      gap: 0.4rem 0.85rem;
+      font-size: 0.84rem;
+    }
+    .device-card-grid .group {
+      border: 1px solid var(--line-2);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem 0.55rem;
+      background: rgba(255, 255, 255, 0.012);
+      min-width: 0;
+    }
+    .device-card-grid .group .gtitle {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--accent);
+      margin: 0 0 0.35rem;
+      font-weight: 600;
+    }
+    .device-card-grid .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin: 0.18rem 0;
+      align-items: baseline;
+    }
+    .device-card-grid .row .lbl {
+      color: var(--muted);
+      font-size: 0.78rem;
+      flex: 0 0 auto;
+    }
+    .device-card-grid .row .val {
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      text-align: right;
+      word-break: break-all;
+      min-width: 0;
+    }
+    .device-card-grid .row .val.warn { color: var(--warn); }
+    .device-card-grid .row .val.muted { color: var(--muted); font-style: italic; }
+    .device-card-grid .bar-wrap {
+      width: 100%;
+      height: 0.4rem;
+      background: var(--line-2);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 0.3rem;
+    }
+    .device-card-grid .bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #60a5fa);
+      transition: width 320ms ease;
+    }
+
+    /* Mode segmented control */
+    .seg {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      padding: 0.2rem;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .seg label {
+      margin: 0;
+      padding: 0.32rem 0.6rem;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .seg input { display: none; }
+    .seg label:hover { color: var(--text); }
+    .seg input:checked + span,
+    .seg label:has(input:checked) { color: var(--accent); background: var(--accent-soft); }
   </style>
 </head>
 <body>
   <main>
-    <h1>idevice-rs</h1>
+    <header class="app-head">
+      <h1>idevice-rs</h1>
+      <span class="tag">WASM + WebUSB · Apple mux · lockdownd · TLS</span>
+    </header>
+
+    <!-- Status bar -->
+    <div class="status-bar" aria-label="Session status">
+      <div class="status-item" id="st-device" data-state="off">
+        <span class="pill"></span>
+        <div style="min-width:0">
+          <div class="label">Device</div>
+          <div class="value" id="st-device-val">Not connected</div>
+        </div>
+      </div>
+      <div class="status-item" id="st-pair" data-state="off">
+        <span class="pill"></span>
+        <div style="min-width:0">
+          <div class="label">Pair record</div>
+          <div class="value" id="st-pair-val">None</div>
+        </div>
+      </div>
+      <div class="status-item" id="st-job" data-state="off">
+        <span class="pill"></span>
+        <div style="min-width:0">
+          <div class="label">Last action</div>
+          <div class="value" id="st-job-val">Idle</div>
+        </div>
+      </div>
+    </div>
+
     <details class="toggle-block">
-      <summary>Overview — WASM, TLS, Linux</summary>
-      <p class="sub">
-        All actions run in <strong>WASM + WebUSB</strong>. Pairing supplies <code>HostID</code> / <code>SystemBUID</code> for
-        cleartext <code>StartSession</code>. When the device returns <code>EnableSessionSSL</code>, this build runs
-        <strong>lockdown TLS</strong> (<strong>rustls</strong>) if you loaded a <strong>full XML pair-record plist</strong> that includes the PEM fields
-        (<code>HostPrivateKey</code>, <code>HostCertificate</code>, <code>RootCertificate</code>, <code>RootPrivateKey</code>) — same idea as the native <code>idevice</code> crate.
-        Use <strong>TLS client cert</strong> below: <code>host</code> matches pymobiledevice3; try <code>root</code> for libimobiledevice-shaped records.
-        <strong>Verbose</strong> logs mux / pseudo-TCP to the console (and TLS-related steps as <code>[wasm-tls]</code>).
+      <summary>About this demo (WASM, TLS, Linux + usbmuxd)</summary>
+      <p class="hint">
+        Everything runs in the browser via <strong>WebUSB</strong> + a Rust → WASM bundle.
+        Pick a device, generate or load a pair record, then run actions like
+        <strong>Battery</strong> / <strong>Diagnostics</strong> / <strong>Crash reports</strong>.
+        When the device sets <code>EnableSessionSSL</code>, the page negotiates lockdown
+        <strong>TLS</strong> with <strong>rustls</strong> using the host certificate chain
+        (same shape as the native <code>idevice</code> CLI / pymobiledevice3).
       </p>
-      <p class="sub">
-        <strong>Linux + WebUSB:</strong> if <code>selectConfiguration</code> / claim fails while a native stack still talks to the phone,
-        the host may be using <strong>usbmuxd</strong> while Chromium needs exclusive USB access — stop <code>usbmuxd</code> briefly
-        (see errors below) and retry, or use a native client.
+      <p class="hint">
+        <strong>Diagnostics</strong> now runs ~40 <code>GetValue</code> queries grouped into
+        <em>Identity</em>, <em>Network / cellular</em>, <em>Locale / time</em>,
+        <em>Activation / security</em>, <em>Storage</em>, <em>iTunes / sync</em> and
+        <em>Battery</em>. Headline values are mirrored into the
+        <strong>Device snapshot</strong> card below; the full sectioned report stays in the
+        log for copy / paste.
+      </p>
+      <p class="hint">
+        On <strong>Linux</strong>, Chromium needs exclusive access to the USB interface — stop
+        <code>usbmuxd</code> briefly if claim fails. Verbose mode logs mux + pseudo-TCP frames
+        to the browser console (<code>[idevice-wasm]</code>).
       </p>
     </details>
 
-    <section>
-      <h2>Verbose (console)</h2>
+    <!-- Device snapshot card (filled by Diagnostics / Fetch with plist) -->
+    <section class="step" id="device-card-section" hidden>
+      <h2><span class="num">i</span><span class="ttl">Device snapshot</span></h2>
+      <p class="hint" id="device-card-meta"></p>
+      <div id="device-card-grid" class="device-card-grid"></div>
+    </section>
+
+    <!-- Step 1: Device -->
+    <section class="step" id="step-device">
+      <h2><span class="num">1</span><span class="ttl">Device</span></h2>
+      <p class="hint">Authorize one Apple device for this page. The browser scopes USB access per origin + serial.</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btn-pick">
+          <span>Request Apple device</span>
+        </button>
+        <button type="button" class="btn" id="btn-mux" data-needs="dev"
+          title="USB mux VERSION (+ SETUP if v2) + pseudo-TCP to lockdownd:62078">
+          <span class="spinner" aria-hidden="true"></span><span>Mux test</span>
+        </button>
+        <button type="button" class="btn" id="btn-qt" data-needs="dev"
+          title="Mux + lockdown QueryType (cleartext)">
+          <span class="spinner" aria-hidden="true"></span><span>QueryType</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Step 2: Pair record -->
+    <section class="step" id="step-pair">
+      <h2><span class="num">2</span><span class="ttl">Pair record</span></h2>
+      <p class="hint">
+        A pair record holds a HostID + RSA host chain trusted by the device. Generate one (Trust
+        prompt on first use) and save it for next time, or load an existing libimobiledevice / usbmuxd
+        XML plist.
+      </p>
+      <div class="row">
+        <div class="seg" role="radiogroup" aria-label="Pair mode">
+          <label><input type="radio" name="pair" value="random" checked /><span>Generate · random</span></label>
+          <label><input type="radio" name="pair" value="legacy" /><span>Generate · legacy</span></label>
+          <label><input type="radio" name="pair" value="plist" /><span>Load plist</span></label>
+        </div>
+      </div>
+
+      <!-- Generate sub-panel -->
+      <div id="pair-generate-panel">
+        <p class="hint">
+          <em>Random</em> → fresh UUIDs each run (libimobiledevice / pymobiledevice3 style).
+          <em>Legacy</em> → fixed HostID, useful if a device gets stuck on UUID handshakes.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btn-pair" data-needs="dev">
+            <span class="spinner" aria-hidden="true"></span><span>Pair + save record</span>
+          </button>
+        </div>
+        <p class="hint" id="pair-hint">Tip: unlock the iPhone first; the Trust prompt may take ~10–30 s.</p>
+      </div>
+
+      <!-- Load sub-panel -->
+      <div id="pair-load-panel" hidden>
+        <div class="row">
+          <label for="plist-file">Pair-record XML plist</label>
+          <input type="file" id="plist-file" accept=".plist,.xml,application/xml,text/xml" />
+          <p class="hint" id="plist-status">Binary plists (<code>bplist00</code>) are not parsed; export as XML on macOS with <code>plutil -convert xml1</code>.</p>
+        </div>
+        <div class="row two-col">
+          <div>
+            <label for="hostid">HostID</label>
+            <input type="text" id="hostid" placeholder="UUID from plist (auto-filled)" autocomplete="off" />
+          </div>
+          <div>
+            <label for="buid">SystemBUID</label>
+            <input type="text" id="buid" placeholder="UUID from plist (auto-filled)" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Pair record summary card (visible when plistXmlText is loaded) -->
+      <div id="pair-summary" class="hint" hidden style="margin-top:0.55rem;padding:0.55rem 0.7rem;border:1px solid var(--accent-line);background:var(--accent-soft);border-radius:8px;color:var(--text);">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.4rem;">
+          <div>
+            <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--accent);">Pair record loaded</div>
+            <div id="pair-summary-ids" style="font-family:var(--mono);font-size:0.78rem;margin-top:0.15rem;"></div>
+          </div>
+          <div class="btn-row" style="margin:0">
+            <button type="button" class="btn btn-ghost" id="btn-pair-copy" title="Copy XML to clipboard">Copy</button>
+            <button type="button" class="btn btn-ghost" id="btn-pair-download" title="Download as pair-record.plist">Download</button>
+            <button type="button" class="btn btn-ghost btn-danger" id="btn-pair-clear" title="Forget pair record from this page + localStorage">Clear</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: Actions -->
+    <section class="step" id="step-actions">
+      <h2><span class="num">3</span><span class="ttl">Run an action</span></h2>
+
       <details class="toggle-block">
-        <summary>What “verbose” logs</summary>
-        <p class="plist-hint" style="margin:0">When checked, mux framing and pseudo-TCP traffic are printed to the browser <code>console</code> (<code>[idevice-wasm]</code>) — not TLS record hex.</p>
+        <summary>TLS settings (advanced)</summary>
+        <div class="row two-col">
+          <div>
+            <label for="tls-client-auth">Client cert</label>
+            <select id="tls-client-auth">
+              <option value="host" selected>host — host leaf + host key (default)</option>
+              <option value="root">root — root cert + root key (libimobiledevice)</option>
+              <option value="chain">chain — host + root in chain</option>
+            </select>
+          </div>
+          <div>
+            <label for="tls-sni">SNI</label>
+            <select id="tls-sni">
+              <option value="device" selected>Device</option>
+              <option value="none">none (IP placeholder)</option>
+            </select>
+          </div>
+        </div>
+        <p class="hint">If TLS handshake fails, try a different client cert or SNI option.</p>
       </details>
-      <label><input type="checkbox" id="verbose" /> Log mux / pseudo-TCP to <code>console</code></label>
-    </section>
 
-    <section>
-      <h2>Pairing mode</h2>
-      <label><input type="radio" name="pair" value="random" checked /> Random HostID / SystemBUID</label>
-      <label><input type="radio" name="pair" value="legacy" /> Legacy (fixed HostID / SystemBUID)</label>
-      <label><input type="radio" name="pair" value="plist" /> From plist — choose file on disk</label>
-      <div class="row">
-        <label for="plist-file">Pair-record plist (XML)</label>
-        <input type="file" id="plist-file" accept=".plist,.xml,application/xml,text/xml" />
-        <p class="plist-hint" id="plist-status">Binary plists are not read here; use an XML plist or type the keys below.</p>
+      <p class="hint">Each action does QueryType → (Pair if needed) → StartSession → optional TLS → service call.</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="btn-bat" data-needs="dev,auth">
+          <span class="spinner" aria-hidden="true"></span><span>Battery</span>
+        </button>
+        <button type="button" class="btn" id="btn-diag" data-needs="dev,auth"
+          title="Identity + network + cellular + locale + activation + storage + battery snapshot via lockdown GetValue (~40 queries, sectioned report)">
+          <span class="spinner" aria-hidden="true"></span><span>Diagnostics</span>
+        </button>
+        <button type="button" class="btn" id="btn-plist-fetch" data-needs="dev,plist"
+          title="Full QueryType + StartSession + TLS + GetValue summary using a loaded pair-record plist">
+          <span class="spinner" aria-hidden="true"></span><span>Fetch with plist</span>
+        </button>
       </div>
-      <div class="row"><label for="hostid">HostID</label><input type="text" id="hostid" placeholder="Filled from plist or paste" autocomplete="off" /></div>
-      <div class="row"><label for="buid">SystemBUID</label><input type="text" id="buid" placeholder="Filled from plist or paste" autocomplete="off" /></div>
-    </section>
 
-    <section id="usb-section">
-      <h2 id="usb-section-h2">USB — mux vs QueryType</h2>
-      <p id="usb-pairing-context" class="plist-hint" hidden></p>
-      <details id="usb-mux-help" class="toggle-block">
-        <summary>Mux vs QueryType — full text (technical)</summary>
-        <p class="plist-hint">
-          After <strong>Request Apple device</strong>, both actions configure the Apple bulk interface, run the USB
-          <strong>mux</strong> protocol (<code>VERSION</code>, optional <code>SETUP</code> on mux v2), then open a
-          <strong>pseudo-TCP</strong> stream to <strong>lockdownd</strong> on port <code>62078</code> — same framing as
-          <code>idevice mux</code> on the CLI, but in the browser.
-        </p>
-        <p class="plist-hint">
-          <strong>Mux handshake</strong> stops once that tunnel is up: it does <em>not</em> send a lockdown plist. Use it to
-          confirm WebUSB + mux + TCP to lockdownd work (output shows mux version + “cleartext path ready”).
-        </p>
-        <p class="plist-hint">
-          <strong>QueryType</strong> does the same USB/mux/TCP setup, then sends lockdownd’s first cleartext request
-          (<code>QueryType</code>) and shows the returned <strong>XML</strong>. That proves lockdownd responds before you use
-          pairing / <code>StartSession</code> / battery below.
-        </p>
-      </details>
-      <button type="button" class="btn btn-primary" id="btn-pick">Request Apple device</button>
-      <button type="button" class="btn" id="btn-mux" title="USB mux VERSION (+ SETUP if v2) + pseudo-TCP to lockdownd:62078 only">Mux handshake (no lockdown plist)</button>
-      <button type="button" class="btn" id="btn-qt" title="Same as mux handshake, then lockdown QueryType request/response">QueryType (mux + first lockdown request)</button>
-    </section>
-
-    <section>
-      <h2>Info (lockdown + optional TLS)</h2>
-      <div class="row">
-        <label for="tls-client-auth">TLS client cert (after EnableSessionSSL)</label>
-        <select id="tls-client-auth" style="width:100%;max-width:22rem;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid var(--line);background:#0a0c10;color:var(--text);font:inherit">
-          <option value="host" selected>host — host leaf + host key (default)</option>
-          <option value="root">root — root cert + root key (libimobiledevice)</option>
-          <option value="chain">chain — host + root in chain</option>
-        </select>
-        <p class="plist-hint">If TLS fails or the device rejects the client cert, try another mode.</p>
-      </div>
-      <div class="row">
-        <label for="tls-sni">TLS SNI</label>
-        <select id="tls-sni" style="width:100%;max-width:22rem;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid var(--line);background:#0a0c10;color:var(--text);font:inherit">
-          <option value="device" selected>Device</option>
-          <option value="none">none (IP placeholder, no SNI)</option>
-        </select>
-      </div>
       <details class="toggle-block">
-        <summary>Fetch with plist — what it does</summary>
-        <p class="plist-hint">Load a <strong>full</strong> XML pair-record plist (including PEM keys), then <strong>Fetch with plist</strong> runs QueryType → StartSession → rustls (if needed) → GetValue. Battery/Diagnostics pass the same loaded plist text for TLS when SSL is required.</p>
+        <summary>Crash reports (crashreportmover + AFC)</summary>
+        <div class="row two-col">
+          <div>
+            <label for="crash-filter">Name filter (substring)</label>
+            <input type="search" id="crash-filter" placeholder="e.g. JetsamEvent or stacks (empty = all)" />
+          </div>
+          <div>
+            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="crash-keep" checked /> Keep on device after copy</label>
+          </div>
+        </div>
+        <p class="hint">Files are streamed into memory (cap ~32&nbsp;MiB). On success a per-file table appears below the log with Save buttons.</p>
+        <div class="btn-row">
+          <button type="button" class="btn" id="btn-crash" data-needs="dev,auth">
+            <span class="spinner" aria-hidden="true"></span><span>Copy crash reports</span>
+          </button>
+        </div>
       </details>
-      <button type="button" class="btn btn-primary" id="btn-plist-fetch">Fetch with pair-record plist</button>
-      <button type="button" class="btn" id="btn-bat">Battery</button>
-      <button type="button" class="btn" id="btn-diag">Diagnostics</button>
-      <label class="row"><input type="checkbox" id="crash-keep" checked /> Keep crash logs on device after copy (like <code>idevicecrashreport -k</code>)</label>
-      <button type="button" class="btn" id="btn-crash" title="crashreportmover + AFC; needs full pair-record plist">Crash reports (copy to browser)</button>
-      <p class="plist-hint">Returns an array of <code>{ name, data }</code> (Uint8Array per file). Cap ~32&nbsp;MiB total.</p>
     </section>
 
-    <pre id="out">Loading WASM…</pre>
+    <!-- Output / log -->
+    <div class="out-card">
+      <div class="out-head">
+        <h2>Output</h2>
+        <div class="actions">
+          <label class="inline" style="margin:0"><input type="checkbox" id="verbose" /> verbose</label>
+          <button type="button" class="btn btn-ghost" id="btn-out-copy" title="Copy log to clipboard">Copy</button>
+          <button type="button" class="btn btn-ghost" id="btn-out-clear" title="Clear log">Clear</button>
+        </div>
+      </div>
+      <pre id="out">Loading WASM…</pre>
+      <div id="files-area" hidden>
+        <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0.7rem 0 0.3rem">Crash reports — files</h2>
+        <div class="btn-row" style="margin-bottom:0.3rem;">
+          <button type="button" class="btn btn-ghost" id="btn-files-download-all" title="Save every file with the same relative names">Save all</button>
+          <button type="button" class="btn btn-ghost" id="btn-files-clear">Clear list</button>
+        </div>
+        <table class="files-table" id="files-table">
+          <thead><tr><th>#</th><th>Name</th><th class="size">Bytes</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </main>
 
   <script type="module">
@@ -144,82 +547,161 @@
       requestAppleDevice,
       muxLockdownHandshake,
       lockdownQueryType,
+      lockdownPair,
       lockdownFetchWithPlistXml,
       lockdownBattery,
       lockdownDiagnostics,
       lockdownCrashReports,
-      lockdownCrashReportsInfo,
     } from "./pkg/idevice_wasm.js";
 
-    const out = document.getElementById("out");
-    const verbose = () => document.getElementById("verbose").checked;
-    const pairMode = () => document.querySelector('input[name="pair"]:checked').value;
-    const hostId = () => document.getElementById("hostid").value.trim();
-    const systemBuid = () => document.getElementById("buid").value.trim();
-    const tlsClientAuth = () => document.getElementById("tls-client-auth").value;
-    const tlsSni = () => document.getElementById("tls-sni").value;
-    const plistStatus = document.getElementById("plist-status");
-    const usbSectionH2 = document.getElementById("usb-section-h2");
-    const usbPairingContext = document.getElementById("usb-pairing-context");
-    const usbMuxHelp = document.getElementById("usb-mux-help");
-    const btnMux = document.getElementById("btn-mux");
-    const btnQt = document.getElementById("btn-qt");
-    /** Full XML text of the loaded pair-record (for WASM plist fetch). */
+    /* -----------------------------
+     * State
+     * ----------------------------- */
+    /** @type {USBDevice | null} */
+    let dev = null;
+    /** Full XML pair record currently in use (generated or loaded). */
     let plistXmlText = null;
+    /** {name, data: Uint8Array}[] from the last crash report run. */
+    let lastFiles = [];
+    /** Currently running button (only one at a time). */
+    let busyBtn = null;
 
-    function refreshUsbSectionForPairing() {
-      const mode = pairMode();
-      /** Pair-record <em>mode</em>: hide mux/QueryType UI (they do not use the plist). */
-      const plistPairingSelected = mode === "plist";
+    /* -----------------------------
+     * DOM helpers
+     * ----------------------------- */
+    const $ = (id) => document.getElementById(id);
+    const out = $("out");
+    const filesArea = $("files-area");
+    const filesTable = $("files-table").querySelector("tbody");
 
-      if (plistPairingSelected) {
-        usbSectionH2.textContent = "USB — device (pair-record plist)";
-        usbPairingContext.innerHTML =
-          "<strong>Pair-record mode:</strong> <strong>Mux handshake</strong> and <strong>QueryType</strong> are hidden — they do not use your plist. Use <strong>Request Apple device</strong>, then <strong>Info</strong> below.";
-        usbPairingContext.hidden = false;
-        if (usbMuxHelp) usbMuxHelp.hidden = true;
-        btnMux.hidden = true;
-        btnQt.hidden = true;
-        return;
-      }
+    const verbose = () => $("verbose").checked;
+    const pairMode = () => /** @type {HTMLInputElement} */ (document.querySelector('input[name="pair"]:checked')).value;
+    const hostId = () => $("hostid").value.trim();
+    const systemBuid = () => $("buid").value.trim();
+    const tlsClientAuth = () => $("tls-client-auth").value;
+    const tlsSni = () => $("tls-sni").value;
 
-      if (usbMuxHelp) usbMuxHelp.hidden = false;
-      btnMux.hidden = false;
-      btnQt.hidden = false;
+    function fmtBytes(n) {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+      return `${(n / (1024 * 1024)).toFixed(2)} MiB`;
+    }
 
-      let title = "USB — mux vs QueryType";
-      let ctx = "";
-      let showCtx = true;
-      if (mode === "random") {
-        title = "USB — mux vs QueryType (random pairing → Info only)";
-        ctx =
-          "<strong>Random pairing:</strong> UUIDs for <code>StartSession</code> apply when you use <strong>Info</strong> — not for mux/QueryType. Open <strong>Mux vs QueryType — full text</strong> above for step-by-step help.";
-      } else if (mode === "legacy") {
-        title = "USB — mux vs QueryType (legacy pairing → Info only)";
-        ctx =
-          "<strong>Legacy pairing:</strong> fixed HostID / SystemBUID apply only to <strong>Info</strong> — mux/QueryType ignore them. Expand <strong>Mux vs QueryType — full text</strong> for details.";
+    function shortId(s) { return s ? s.slice(0, 8) + "…" : "—"; }
+
+    /* -----------------------------
+     * Status bar
+     * ----------------------------- */
+    function setStatus(id, state, value) {
+      const node = $(id);
+      if (!node) return;
+      node.dataset.state = state; // off | ok | warn
+      node.classList.toggle("ok", state === "ok");
+      node.classList.toggle("warn", state === "warn");
+      $(`${id}-val`).textContent = value;
+    }
+    function refreshStatus() {
+      if (dev) {
+        const name = dev.productName || "Apple device";
+        const sn = dev.serialNumber ? ` · ${shortId(dev.serialNumber)}` : "";
+        setStatus("st-device", "ok", name + sn);
       } else {
-        showCtx = false;
+        setStatus("st-device", "off", "Not connected");
       }
-      usbSectionH2.textContent = title;
-      if (showCtx && ctx) {
-        usbPairingContext.innerHTML = ctx;
-        usbPairingContext.hidden = false;
+      if (plistXmlText) {
+        try {
+          const d = readPlistRootDictStrings(plistXmlText);
+          const h = d.HostID ? shortId(d.HostID) : "?";
+          setStatus("st-pair", "ok", `Loaded · HostID ${h}`);
+        } catch {
+          setStatus("st-pair", "warn", "Loaded (parse error)");
+        }
       } else {
-        usbPairingContext.textContent = "";
-        usbPairingContext.hidden = true;
+        setStatus("st-pair", "off", "None");
+      }
+      refreshButtonStates();
+    }
+
+    /* -----------------------------
+     * Output log (timestamped)
+     * ----------------------------- */
+    function nowStamp() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+    function logLine(level, text) {
+      const cls = { info: "info", ok: "ok", warn: "warn", err: "err", step: "step" }[level] || "info";
+      out.insertAdjacentHTML(
+        "beforeend",
+        `<span class="ts">${nowStamp()}</span> <span class="${cls}">${escapeHtml(text)}</span>\n`
+      );
+      out.scrollTop = out.scrollHeight;
+    }
+    function logBlock(text) {
+      out.insertAdjacentHTML("beforeend", `${escapeHtml(text)}\n`);
+      out.scrollTop = out.scrollHeight;
+    }
+    function setOutput(text) {
+      out.textContent = text;
+    }
+
+    /* -----------------------------
+     * Button busy state + prereq gating
+     * ----------------------------- */
+    function refreshButtonStates() {
+      for (const b of document.querySelectorAll(".btn[data-needs]")) {
+        const needs = (b.getAttribute("data-needs") || "").split(",").filter(Boolean);
+        let reason = "";
+        if (needs.includes("dev") && !dev) reason = "Pick a device first.";
+        else if (needs.includes("plist") && !plistXmlText)
+          reason = "Load or generate a pair record first.";
+        else if (needs.includes("auth")) {
+          const m = pairMode();
+          if (m === "plist" && !plistXmlText) reason = "Load a pair-record XML first, or pick Generate.";
+        }
+        b.disabled = !!reason || !!busyBtn;
+        if (reason) b.title = reason;
+      }
+    }
+    function setBusy(btn, msg) {
+      busyBtn = btn;
+      btn.dataset.running = "1";
+      setStatus("st-job", "warn", msg || "Running…");
+      refreshButtonStates();
+    }
+    function clearBusy(btn, ok = true, msg) {
+      delete btn.dataset.running;
+      busyBtn = null;
+      setStatus("st-job", ok ? "ok" : "off", msg || (ok ? "Done" : "Failed"));
+      refreshButtonStates();
+    }
+    async function runBusy(btn, label, fn) {
+      if (busyBtn) return;
+      setBusy(btn, label + "…");
+      logLine("step", `▶ ${label}`);
+      try {
+        await fn();
+        logLine("ok", `✓ ${label} done`);
+        clearBusy(btn, true, `${label} ✓`);
+      } catch (e) {
+        logLine("err", `✗ ${label}: ${e}`);
+        clearBusy(btn, false, `${label} ✗`);
       }
     }
 
-    /**
-     * @param {string} xmlText
-     * @returns {Record<string, string>}
-     */
+    /* -----------------------------
+     * Pair record helpers
+     * ----------------------------- */
     function readPlistRootDictStrings(xmlText) {
       const d = new DOMParser().parseFromString(xmlText, "application/xml");
-      if (d.querySelector("parsererror")) {
-        throw new Error("Invalid plist XML");
-      }
+      if (d.querySelector("parsererror")) throw new Error("Invalid plist XML");
       const dict = d.querySelector("plist dict");
       if (!dict) throw new Error("No dict found in plist");
       /** @type {Record<string, string>} */
@@ -227,17 +709,361 @@
       let pendingKey = null;
       for (const el of dict.children) {
         if (!(el instanceof Element)) continue;
-        if (el.tagName === "key") {
-          pendingKey = (el.textContent ?? "").trim();
-        } else if (pendingKey !== null) {
+        if (el.tagName === "key") pendingKey = (el.textContent ?? "").trim();
+        else if (pendingKey !== null) {
           if (el.tagName === "string") out[pendingKey] = el.textContent ?? "";
           pendingKey = null;
         }
       }
       return out;
     }
+    function setPlist(xml, sourceLabel) {
+      plistXmlText = xml;
+      try { localStorage.setItem("idevice-rs.pairRecordXml", xml); } catch {}
+      try {
+        const d = readPlistRootDictStrings(xml);
+        if (d.HostID) $("hostid").value = d.HostID;
+        if (d.SystemBUID) $("buid").value = d.SystemBUID;
+        $("pair-summary-ids").innerHTML =
+          `HostID = <strong>${escapeHtml(d.HostID || "?")}</strong><br>SystemBUID = ${escapeHtml(d.SystemBUID || "?")}`;
+      } catch {
+        $("pair-summary-ids").textContent = "(unparseable XML)";
+      }
+      $("pair-summary").hidden = false;
+      logLine("ok", `Pair record ${sourceLabel} (${(xml.length / 1024).toFixed(1)} KiB)`);
+      refreshStatus();
+    }
+    function clearPlist() {
+      plistXmlText = null;
+      try { localStorage.removeItem("idevice-rs.pairRecordXml"); } catch {}
+      $("pair-summary").hidden = true;
+      $("hostid").value = "";
+      $("buid").value = "";
+      logLine("info", "Pair record cleared");
+      refreshStatus();
+    }
+    function downloadPlist() {
+      if (!plistXmlText) return;
+      const blob = new Blob([plistXmlText], { type: "application/xml" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "pair-record.plist";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      logLine("info", "pair-record.plist downloaded");
+    }
+    async function copyPlist() {
+      if (!plistXmlText) return;
+      try {
+        await navigator.clipboard.writeText(plistXmlText);
+        logLine("ok", "Pair record XML copied to clipboard");
+      } catch (e) {
+        logLine("err", "Clipboard write failed: " + e);
+      }
+    }
 
-    document.getElementById("plist-file").addEventListener("change", async (ev) => {
+    /* -----------------------------
+     * Device snapshot card
+     * ----------------------------- */
+    /**
+     * Parse the sectioned `format_lockdown_device_report` text into
+     * `{ section: { label: value } }`. Both Diagnostics and Fetch-with-plist emit it.
+     */
+    function parseDeviceReport(text) {
+      const sections = {};
+      let current = null;
+      const lines = String(text).split(/\r?\n/);
+      let pendingMultilineLabel = null;
+      let pendingMultilineLines = [];
+      const flushMultiline = () => {
+        if (pendingMultilineLabel && current) {
+          sections[current] = sections[current] || {};
+          sections[current][pendingMultilineLabel] = pendingMultilineLines.join("\n").trim();
+        }
+        pendingMultilineLabel = null;
+        pendingMultilineLines = [];
+      };
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const next = lines[i + 1];
+        if (next && /^-{3,}$/.test(next.trim()) && line.trim().length) {
+          flushMultiline();
+          current = line.trim();
+          sections[current] = sections[current] || {};
+          i++;
+          continue;
+        }
+        if (!current) continue;
+        // Sub-block multi-line capture (e.g. battery dict): "Label:" then indented lines.
+        if (pendingMultilineLabel) {
+          if (/^\s{2,}\S/.test(line)) {
+            pendingMultilineLines.push(line.replace(/^\s+/, ""));
+            continue;
+          } else {
+            flushMultiline();
+          }
+        }
+        const scalar = line.match(/^\s{2}(\S.*?)\s*:\s*(.*)$/);
+        if (scalar) {
+          sections[current][scalar[1]] = scalar[2];
+          continue;
+        }
+        const ml = line.match(/^([\w.\s/()]+):\s*$/);
+        if (ml && !line.startsWith(" ")) {
+          pendingMultilineLabel = ml[1].trim();
+          pendingMultilineLines = [];
+          continue;
+        }
+      }
+      flushMultiline();
+      return sections;
+    }
+
+    /** Render a section group with `{ label, val, [warn] }[]` rows. */
+    function renderGroup(title, rows) {
+      const wrap = document.createElement("div");
+      wrap.className = "group";
+      const t = document.createElement("div");
+      t.className = "gtitle";
+      t.textContent = title;
+      wrap.appendChild(t);
+      for (const r of rows) {
+        if (r.val === undefined || r.val === null || r.val === "") continue;
+        const row = document.createElement("div");
+        row.className = "row";
+        const lbl = document.createElement("span");
+        lbl.className = "lbl";
+        lbl.textContent = r.label;
+        const val = document.createElement("span");
+        val.className = "val" + (r.warn ? " warn" : "") + (r.muted ? " muted" : "");
+        val.textContent = r.val;
+        row.appendChild(lbl);
+        row.appendChild(val);
+        wrap.appendChild(row);
+        if (r.bar !== undefined) {
+          const bw = document.createElement("div");
+          bw.className = "bar-wrap";
+          const b = document.createElement("div");
+          b.className = "bar";
+          b.style.width = `${Math.max(0, Math.min(100, r.bar))}%`;
+          bw.appendChild(b);
+          wrap.appendChild(bw);
+        }
+      }
+      return wrap;
+    }
+
+    /** Parse a string from the report that looks like "256000000000  (~238.42 GiB)". */
+    function bytesAndPretty(v) {
+      if (!v) return null;
+      const m = String(v).match(/^(\d+)/);
+      if (!m) return null;
+      const n = Number(m[1]);
+      if (!Number.isFinite(n)) return null;
+      return { bytes: n, pretty: fmtBytes(n) };
+    }
+
+    /** Pull a single key from a dict-style multi-line value (e.g. battery block). */
+    function pickFromBlock(block, key) {
+      if (!block) return undefined;
+      for (const line of String(block).split(/\r?\n/)) {
+        const m = line.match(/^([\w.]+)\s*:\s*(.+?)\s*$/);
+        if (m && m[1] === key) return m[2];
+      }
+      return undefined;
+    }
+
+    /**
+     * Build a structured "Device snapshot" view from the diagnostics text and show it
+     * above the Output log. Hidden when no parseable data is present.
+     */
+    function renderDeviceCard(reportText) {
+      const cardSec = $("device-card-section");
+      const grid = $("device-card-grid");
+      const meta = $("device-card-meta");
+      grid.innerHTML = "";
+
+      const parsed = parseDeviceReport(reportText);
+      const id = parsed["Identity"] || {};
+      const net = parsed["Network / cellular"] || {};
+      const loc = parsed["Locale / time"] || {};
+      const act = parsed["Activation / security"] || {};
+      const storeS = parsed["Storage (disk_usage)"] || {};
+      const batBlock = (parsed["Battery (com.apple.mobile.battery)"] || {})["Mobile.battery"];
+
+      // No useful keys at all → keep the card hidden.
+      const haveAny =
+        Object.keys(id).length || Object.keys(net).length || Object.keys(act).length ||
+        Object.keys(storeS).length || batBlock;
+      if (!haveAny) {
+        cardSec.hidden = true;
+        return;
+      }
+
+      // --- Identity ---
+      const marketing = id["MarketingName"];
+      const product = id["ProductType"];
+      const ver = id["ProductVersion"];
+      const build = id["BuildVersion"];
+      const headline =
+        (marketing && marketing !== "Error: GetProhibited" ? marketing : product) +
+        (ver ? ` · iOS ${ver}` : "") +
+        (build ? ` (${build})` : "");
+      meta.textContent = headline;
+
+      grid.appendChild(renderGroup("Identity", [
+        { label: "Name", val: id["DeviceName"] },
+        { label: "Marketing", val: id["MarketingName"], muted: id["MarketingName"]?.startsWith("Error") },
+        { label: "Model", val: id["ProductType"] },
+        { label: "HW model", val: id["HardwareModel"] },
+        { label: "Model #", val: id["ModelNumber"] },
+        { label: "Region", val: id["RegionInfo"] },
+        { label: "iOS", val: id["ProductVersion"] },
+        { label: "Build", val: id["BuildVersion"] },
+        { label: "Class", val: id["DeviceClass"] },
+        { label: "CPU", val: id["CPUArchitecture"] },
+        { label: "ChipID", val: id["ChipID"] },
+        { label: "BoardId", val: id["BoardId"] },
+      ]));
+
+      grid.appendChild(renderGroup("Identifiers", [
+        { label: "UDID", val: id["UniqueDeviceID"] },
+        { label: "Serial", val: id["SerialNumber"] },
+        { label: "WiFi MAC", val: net["WiFiAddress"] },
+        { label: "Eth MAC", val: net["EthernetAddress"], muted: net["EthernetAddress"]?.startsWith("Error") },
+        { label: "BT MAC", val: net["BluetoothAddress"] },
+      ]));
+
+      const imeiOk = net["InternationalMobileEquipmentIdentity"] && !net["InternationalMobileEquipmentIdentity"].startsWith("Error");
+      grid.appendChild(renderGroup("Cellular", [
+        { label: "IMEI", val: net["InternationalMobileEquipmentIdentity"], muted: !imeiOk },
+        { label: "MEID", val: net["MobileEquipmentIdentifier"], muted: net["MobileEquipmentIdentifier"]?.startsWith("Error") },
+        { label: "ICCID", val: net["IntegratedCircuitCardIdentity"], muted: net["IntegratedCircuitCardIdentity"]?.startsWith("Error") },
+        { label: "IMSI", val: net["InternationalMobileSubscriberIdentity"], muted: net["InternationalMobileSubscriberIdentity"]?.startsWith("Error") },
+        { label: "Phone", val: net["PhoneNumber"], muted: net["PhoneNumber"]?.startsWith("Error") },
+      ]));
+
+      grid.appendChild(renderGroup("Locale / time", [
+        { label: "TimeZone", val: loc["TimeZone"] },
+        { label: "Epoch", val: loc["TimeIntervalSince1970"] },
+        { label: "Language", val: loc["Language"], muted: loc["Language"]?.startsWith("Error") },
+        { label: "Locale", val: loc["Locale"], muted: loc["Locale"]?.startsWith("Error") },
+      ]));
+
+      const passProtected = String(act["PasswordProtected"] || "").toLowerCase() === "true";
+      grid.appendChild(renderGroup("Activation / security", [
+        { label: "ActivationState", val: act["ActivationState"], warn: act["ActivationState"] && act["ActivationState"] !== "Activated" },
+        { label: "Acknowledged", val: act["ActivationStateAcknowledged"] },
+        { label: "BrickState", val: act["BrickState"], warn: String(act["BrickState"] || "").toLowerCase() === "true" },
+        { label: "DeveloperMode", val: act["DeveloperModeStatus"] },
+        { label: "Passcode", val: passProtected ? "yes" : (act["PasswordProtected"] || ""), warn: !passProtected && act["PasswordProtected"] !== undefined },
+        { label: "TrustedHost", val: act["TrustedHostAttached"] },
+      ]));
+
+      // Storage with usage bar.
+      const storageRows = [];
+      const total = bytesAndPretty(storeS["TotalDiskCapacity (disk_usage)"] || storeS["TotalDiskCapacity (mobile.disk_usage)"]);
+      const sysCap = bytesAndPretty(storeS["TotalSystemCapacity"]);
+      const dataCap = bytesAndPretty(storeS["TotalDataCapacity"]);
+      const dataAvail = bytesAndPretty(storeS["TotalDataAvailable"] || storeS["AmountDataAvailable"]);
+      if (total) storageRows.push({ label: "Total", val: total.pretty });
+      if (sysCap) storageRows.push({ label: "System", val: sysCap.pretty });
+      if (dataCap) storageRows.push({ label: "Data", val: dataCap.pretty });
+      if (dataAvail) storageRows.push({ label: "Free", val: dataAvail.pretty });
+      if (dataCap && dataAvail) {
+        const used = dataCap.bytes - dataAvail.bytes;
+        const pct = (used / dataCap.bytes) * 100;
+        storageRows.push({
+          label: "Used",
+          val: `${fmtBytes(Math.max(0, used))} (${pct.toFixed(1)}%)`,
+          warn: pct > 90,
+          bar: pct,
+        });
+      }
+      if (storageRows.length) grid.appendChild(renderGroup("Storage", storageRows));
+
+      // Battery block — pull headline keys.
+      if (batBlock) {
+        const cap = pickFromBlock(batBlock, "BatteryCurrentCapacity");
+        const charging = (pickFromBlock(batBlock, "BatteryIsCharging") || pickFromBlock(batBlock, "IsCharging") || "").toLowerCase();
+        const externalConn = (pickFromBlock(batBlock, "ExternalConnected") || "").toLowerCase();
+        const fullyCharged = (pickFromBlock(batBlock, "FullyCharged") || "").toLowerCase();
+        const hasBattery = (pickFromBlock(batBlock, "HasBattery") || "").toLowerCase();
+        const rows = [];
+        if (cap) rows.push({
+          label: "Charge",
+          val: `${cap}%`,
+          bar: Number(cap),
+          warn: Number(cap) < 20,
+        });
+        if (charging) rows.push({ label: "Charging", val: charging });
+        if (externalConn) rows.push({ label: "Plugged", val: externalConn });
+        if (fullyCharged) rows.push({ label: "Full", val: fullyCharged });
+        if (hasBattery) rows.push({ label: "HasBattery", val: hasBattery });
+        if (rows.length) grid.appendChild(renderGroup("Battery", rows));
+      }
+
+      cardSec.hidden = false;
+    }
+
+    /* -----------------------------
+     * Crash reports — file table
+     * ----------------------------- */
+    function renderFiles(items) {
+      lastFiles = items || [];
+      filesTable.innerHTML = "";
+      if (!lastFiles.length) {
+        filesArea.hidden = true;
+        return;
+      }
+      filesArea.hidden = false;
+      const total = lastFiles.reduce((a, f) => a + (f.data?.length || 0), 0);
+      const totalRow = document.createElement("tr");
+      totalRow.innerHTML = `<td colspan="3" style="color:var(--muted);">${lastFiles.length} file(s) · ${fmtBytes(total)}</td><td></td>`;
+      filesTable.appendChild(totalRow);
+      lastFiles.forEach((f, i) => {
+        const tr = document.createElement("tr");
+        const size = f.data?.length || 0;
+        tr.innerHTML = `<td style="color:var(--muted)">${i + 1}</td><td class="name">${escapeHtml(f.name)}</td><td class="size">${fmtBytes(size)}</td><td class="actions"></td>`;
+        const td = tr.querySelector("td.actions");
+        const btn = document.createElement("button");
+        btn.className = "btn btn-ghost";
+        btn.textContent = "Save";
+        btn.addEventListener("click", () => downloadFile(f));
+        td.appendChild(btn);
+        filesTable.appendChild(tr);
+      });
+    }
+    function downloadFile(f) {
+      const blob = new Blob([f.data], { type: "application/octet-stream" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = (f.name || "file").replace(/\//g, "_");
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }
+    function downloadAllFiles() {
+      lastFiles.forEach((f, i) => setTimeout(() => downloadFile(f), i * 80));
+    }
+
+    /* -----------------------------
+     * Pair-mode segmented control
+     * ----------------------------- */
+    function refreshPairPanel() {
+      const m = pairMode();
+      $("pair-generate-panel").hidden = m === "plist";
+      $("pair-load-panel").hidden = m !== "plist";
+      refreshButtonStates();
+    }
+
+    /* -----------------------------
+     * Wire up controls
+     * ----------------------------- */
+    for (const el of document.querySelectorAll('input[name="pair"]')) {
+      el.addEventListener("change", refreshPairPanel);
+    }
+
+    $("plist-file").addEventListener("change", async (ev) => {
       const input = /** @type {HTMLInputElement} */ (ev.target);
       const file = input.files?.[0];
       if (!file) return;
@@ -246,173 +1072,152 @@
         const u8 = new Uint8Array(buf);
         const magic = String.fromCharCode(...u8.slice(0, 6));
         if (magic === "bplist") {
-          plistXmlText = null;
-          refreshUsbSectionForPairing();
-          plistStatus.textContent =
-            "This file is a binary plist — save as XML from your machine, or type HostID / SystemBUID below.";
+          $("plist-status").textContent =
+            "Binary plist — convert to XML first (e.g. `plutil -convert xml1 file.plist`).";
           return;
         }
         const text = new TextDecoder("utf-8", { fatal: false }).decode(u8);
-        plistXmlText = text;
-        refreshUsbSectionForPairing();
         const dict = readPlistRootDictStrings(text);
-        const h = dict.HostID?.trim();
-        const s = dict.SystemBUID?.trim();
-        if (!h || !s) {
-          plistXmlText = null;
-          refreshUsbSectionForPairing();
-          plistStatus.textContent =
+        if (!dict.HostID || !dict.SystemBUID) {
+          $("plist-status").textContent =
             "Plist has no HostID / SystemBUID at the root dict (wrong file or nested structure).";
           return;
         }
-        document.getElementById("hostid").value = h;
-        document.getElementById("buid").value = s;
-        plistStatus.textContent = `Loaded ${file.name} — HostID and SystemBUID filled.`;
-        document.querySelector('input[name="pair"][value="plist"]').checked = true;
-        refreshUsbSectionForPairing();
+        setPlist(text, `loaded from ${file.name}`);
+        $("plist-status").textContent = `Loaded ${file.name} — HostID + SystemBUID filled.`;
       } catch (e) {
-        plistXmlText = null;
-        refreshUsbSectionForPairing();
-        plistStatus.textContent = String(e);
+        $("plist-status").textContent = String(e);
       }
     });
 
-    for (const el of document.querySelectorAll('input[name="pair"]')) {
-      el.addEventListener("change", () => refreshUsbSectionForPairing());
-    }
+    $("btn-pair-copy").addEventListener("click", copyPlist);
+    $("btn-pair-download").addEventListener("click", downloadPlist);
+    $("btn-pair-clear").addEventListener("click", clearPlist);
+    $("btn-out-clear").addEventListener("click", () => { out.innerHTML = ""; });
+    $("btn-out-copy").addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(out.textContent || "");
+        logLine("ok", "Log copied to clipboard");
+      } catch (e) {
+        logLine("err", "Clipboard write failed: " + e);
+      }
+    });
+    $("btn-files-clear").addEventListener("click", () => renderFiles([]));
+    $("btn-files-download-all").addEventListener("click", downloadAllFiles);
 
-    /** @type {USBDevice | null} */
-    let dev = null;
-
+    /* -----------------------------
+     * Boot
+     * ----------------------------- */
+    setOutput("");
+    logLine("info", "Loading WASM…");
     try {
       await init();
-      refreshUsbSectionForPairing();
-      out.textContent = "Ready — pick a device, then run mux or lockdown.";
+      logLine("ok", "WASM loaded — pick an Apple device to begin.");
     } catch (e) {
-      out.textContent = "WASM failed — run ./scripts/build-wasm.sh\n" + e;
+      logLine("err", "WASM init failed (run ./scripts/build-wasm.sh): " + e);
     }
 
-    document.getElementById("btn-pick").addEventListener("click", async () => {
+    try {
+      const cached = localStorage.getItem("idevice-rs.pairRecordXml");
+      if (cached && cached.includes("<plist")) {
+        setPlist(cached, "restored from localStorage cache");
+      }
+    } catch {}
+
+    refreshPairPanel();
+    refreshStatus();
+
+    /* -----------------------------
+     * Actions
+     * ----------------------------- */
+    $("btn-pick").addEventListener("click", async () => {
       try {
         dev = await requestAppleDevice();
-        out.textContent = "Device selected.";
+        logLine("ok", `Device authorized: ${dev.productName || "?"} (${dev.serialNumber || "?"})`);
+        setStatus("st-job", "off", "Idle");
       } catch (e) {
-        out.textContent = String(e);
+        logLine("err", "Pick device: " + e);
       }
+      refreshStatus();
     });
 
-    function needDev() {
-      if (!dev) {
-        out.textContent = "Request an Apple device first.";
-        return false;
-      }
-      return true;
-    }
+    $("btn-mux").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "Mux handshake", async () => {
+        const r = await muxLockdownHandshake(dev, verbose());
+        logBlock(r);
+      })
+    );
 
-    document.getElementById("btn-mux").addEventListener("click", async () => {
-      if (!needDev()) return;
-      try {
-        out.textContent = await muxLockdownHandshake(dev, verbose());
-      } catch (e) {
-        out.textContent = String(e);
-      }
-    });
+    $("btn-qt").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "QueryType", async () => {
+        const r = await lockdownQueryType(dev, verbose());
+        logBlock(r);
+      })
+    );
 
-    document.getElementById("btn-qt").addEventListener("click", async () => {
-      if (!needDev()) return;
-      try {
-        out.textContent = await lockdownQueryType(dev, verbose());
-      } catch (e) {
-        out.textContent = String(e);
-      }
-    });
-
-    document.getElementById("btn-plist-fetch").addEventListener("click", async () => {
-      if (!needDev()) return;
-      if (!plistXmlText || !plistXmlText.trim()) {
-        out.textContent =
-          "Load an XML pair-record plist (file picker in Pairing mode) first — or paste/export HostID+SystemBUID and use Battery with “From plist”.";
+    $("btn-pair").addEventListener("click", (ev) => {
+      const m = pairMode();
+      if (m !== "random" && m !== "legacy") {
+        logLine("warn", "Switch to Generate · random or Generate · legacy first.");
         return;
       }
-      out.textContent = "Running plist fetch (see DevTools console for [idevice-wasm] logs)…";
-      try {
-        out.textContent = await lockdownFetchWithPlistXml(
-          dev,
-          plistXmlText,
-          verbose(),
-          tlsClientAuth(),
-          tlsSni()
-        );
-      } catch (e) {
-        out.textContent = String(e);
-      }
+      runBusy(ev.currentTarget, `Pair (${m})`, async () => {
+        logLine("info", "Generating RSA keys + Pair plist… unlock the iPhone for the Trust prompt.");
+        const xml = await lockdownPair(dev, m, verbose());
+        setPlist(xml, "generated and saved");
+        downloadPlist();
+        logLine("ok", "Pair record cached locally — actions below will reuse it without Trust.");
+      });
     });
 
-    document.getElementById("btn-bat").addEventListener("click", async () => {
-      if (!needDev()) return;
-      try {
-        out.textContent = await lockdownBattery(
-          dev,
-          pairMode(),
-          hostId(),
-          systemBuid(),
-          verbose(),
-          plistXmlText ?? "",
-          tlsClientAuth(),
-          tlsSni()
+    $("btn-bat").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "Battery", async () => {
+        const r = await lockdownBattery(
+          dev, pairMode(), hostId(), systemBuid(), verbose(),
+          plistXmlText ?? "", tlsClientAuth(), tlsSni()
         );
-      } catch (e) {
-        out.textContent = String(e);
-      }
-    });
+        logBlock(r);
+      })
+    );
 
-    document.getElementById("btn-diag").addEventListener("click", async () => {
-      if (!needDev()) return;
-      try {
-        out.textContent = await lockdownDiagnostics(
-          dev,
-          pairMode(),
-          hostId(),
-          systemBuid(),
-          verbose(),
-          plistXmlText ?? "",
-          tlsClientAuth(),
-          tlsSni()
+    $("btn-diag").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "Diagnostics", async () => {
+        const r = await lockdownDiagnostics(
+          dev, pairMode(), hostId(), systemBuid(), verbose(),
+          plistXmlText ?? "", tlsClientAuth(), tlsSni()
         );
-      } catch (e) {
-        out.textContent = String(e);
-      }
-    });
+        logBlock(r);
+        renderDeviceCard(r);
+      })
+    );
 
-    document.getElementById("btn-crash").addEventListener("click", async () => {
-      if (!needDev()) return;
-      if (!plistXmlText || !plistXmlText.trim()) {
-        out.textContent =
-          "Load a full XML pair-record plist first (with PEM keys). Short help:\n" +
-          lockdownCrashReportsInfo();
-        return;
-      }
-      out.textContent = "Crash reports: mover → ping → AFC (see console)…";
-      try {
+    $("btn-plist-fetch").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "Fetch with plist", async () => {
+        if (!plistXmlText) throw new Error("No pair record loaded");
+        const r = await lockdownFetchWithPlistXml(
+          dev, plistXmlText, verbose(), tlsClientAuth(), tlsSni()
+        );
+        logBlock(r);
+        renderDeviceCard(r);
+      })
+    );
+
+    $("btn-crash").addEventListener("click", (ev) =>
+      runBusy(ev.currentTarget, "Crash reports", async () => {
+        const filter = $("crash-filter").value.trim();
+        const keep = $("crash-keep").checked;
         const arr = await lockdownCrashReports(
-          dev,
-          plistXmlText,
-          verbose(),
-          tlsClientAuth(),
-          tlsSni(),
-          document.getElementById("crash-keep").checked,
-          "",
-          false
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni(),
+          keep, filter, false
         );
-        const lines = Array.from(arr, (o) => o.name);
-        out.textContent =
-          `Done: ${arr.length} file(s). Names:\n` +
-          lines.join("\n") +
-          "\n\nEach item is { name, data } (data is Uint8Array) — inspect in DevTools or save from a small script.";
-      } catch (e) {
-        out.textContent = String(e);
-      }
-    });
+        const items = Array.from(arr, (o) => ({ name: o.name, data: o.data }));
+        renderFiles(items);
+        const total = items.reduce((a, f) => a + f.data.length, 0);
+        logLine("ok", `Copied ${items.length} file(s) · ${fmtBytes(total)} · filter="${filter}" keep=${keep}`);
+      })
+    );
   </script>
 </body>
 </html>

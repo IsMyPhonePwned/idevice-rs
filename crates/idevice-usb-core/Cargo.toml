@@ -8,3 +8,6 @@ publish = false
 [dependencies]
 base64 = "0.22"
 getrandom = "0.2"
+
+[dev-dependencies]
+plist = "1"

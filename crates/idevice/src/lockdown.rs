@@ -24,6 +24,16 @@ pub enum LockdownTransport {
     Socket(Rc<RefCell<crate::socket_mux::SocketMuxLink>>),
 }
 
+/// Side-data produced while building a **`Pair`** request: the freshly-built **`DeviceCertificate`**
+/// PEM and the optional **`WiFiMACAddress`** (cleartext **`GetValue WiFiAddress`**) that should
+/// be saved alongside the host keys / IDs into a libimobiledevice-shape pair-record plist after a
+/// successful **`Pair`** so future runs can skip the Trust prompt.
+#[derive(Clone, Debug)]
+pub struct PairBuildMeta {
+    pub device_cert_pem: String,
+    pub wifi_mac: Option<String>,
+}
+
 pub struct LockdownClient {
     transport: LockdownTransport,
     app_rx_buffer: Vec<u8>,
@@ -34,6 +44,14 @@ pub struct LockdownClient {
 
 impl LockdownClient {
     /// Drop the current session and open a **fresh** lockdownd connection (USB pseudo-TCP or usbmuxd tunnel).
+    ///
+    /// On USB this opens a **new pseudo-TCP on the existing mux session** (same approach as
+    /// `MuxHub::connect_additional_tcp` and the WASM build / libimobiledevice secondary streams).
+    ///
+    /// We deliberately do **not** re-issue `VERSION` + `SETUP`: the SETUP packet resets the device's
+    /// expected mux RX sequence to `1`, but our carried-forward `mux_tx_seq` is well past that, so iOS
+    /// would then emit `[mux] CONTROL "detected duplicate packet. Expected 1 received <N>"` and drop
+    /// every following frame until bulk IN times out.
     pub fn reopen_lockdown_tcp(&mut self) -> Result<(), String> {
         self.tls.take();
         self.tls_payload_trace = false;
@@ -42,19 +60,10 @@ impl LockdownClient {
             LockdownTransport::Usb(mux) => {
                 let mut ml = mux.borrow_mut();
                 ml.clear_usb_rx_buffer();
-                let hub_rc = ml.hub.clone();
-                let eps = ml.hub.borrow().eps;
-                let mut mux_tx_next = hub_rc.borrow().mux_tx_seq;
-                let new_conn = {
-                    let mut hub = hub_rc.borrow_mut();
-                    TcpConn::handshake_and_connect(
-                        &mut *hub,
-                        &eps,
-                        idevice_usb_core::lockdown_proto::LOCKDOWND_PORT,
-                        &mut mux_tx_next,
-                    )?
-                };
-                hub_rc.borrow_mut().mux_tx_seq = mux_tx_next;
+                let new_conn = ml
+                    .hub
+                    .borrow_mut()
+                    .connect_additional_tcp(idevice_usb_core::lockdown_proto::LOCKDOWND_PORT)?;
                 ml.conn = new_conn;
             }
             #[cfg(unix)]
@@ -341,6 +350,20 @@ impl LockdownClient {
         keys: &crate::crypto::HostKeys,
         ids: &PairingIds,
     ) -> Result<String, String> {
+        Ok(self.build_pair_request_xml_with_meta(keys, ids)?.0)
+    }
+
+    /// Build the **`Pair`** request XML and **also** return the freshly-built
+    /// **`DeviceCertificate`** PEM and the **`WiFiMACAddress`** fetched cleartext from
+    /// **`GetValue WiFiAddress`**. Callers that want to **persist** the pair record after a
+    /// successful **`Pair`** (the libimobiledevice / `/var/lib/lockdown/<UDID>.plist` flow)
+    /// reuse these so a later run can skip **`Pair`** and go straight to
+    /// **`StartSession` → TLS** without re-triggering the Trust prompt on the iPhone.
+    pub fn build_pair_request_xml_with_meta(
+        &mut self,
+        keys: &crate::crypto::HostKeys,
+        ids: &PairingIds,
+    ) -> Result<(String, PairBuildMeta), String> {
         let wifi_mac = self.try_wifi_mac_address();
         let host_name = Self::cli_host_name_for_pair();
 
@@ -383,7 +406,13 @@ impl LockdownClient {
                 head
             );
         }
-        Ok(pair_xml)
+        Ok((
+            pair_xml,
+            PairBuildMeta {
+                device_cert_pem,
+                wifi_mac,
+            },
+        ))
     }
 
     pub fn pair_exchange(&mut self, pair_xml: &str) -> Result<String, String> {

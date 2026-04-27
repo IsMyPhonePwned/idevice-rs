@@ -8,8 +8,11 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use idevice::connect::{open_lockdown_for_cli, LockdownConnectArgs};
 use idevice::crypto::{generate_host_keys, HostKeys};
-use idevice::lockdown::{LockdownClient, LockdownTlsClientAuth, LockdownTlsSni};
-use idevice::pair_record::{load_pair_record, resolve_pair_record_path};
+use idevice::lockdown::{LockdownClient, LockdownTlsClientAuth, LockdownTlsSni, PairBuildMeta};
+use idevice::pair_record::{
+    default_pair_record_save_path, load_pair_record, resolve_pair_record_path,
+    save_pair_record_plist,
+};
 use idevice::usb::{
     format_apple_device_identity, list_apple_devices, open_apple, prepare_mux_interface,
 };
@@ -47,7 +50,18 @@ fn load_or_generate_keys_and_ids(
     device: &DeviceArgs,
     usb_serial: &str,
 ) -> Result<(HostKeys, PairingIds, bool), String> {
-    let path = resolve_pair_record_path(&device.pair_record, &device.pair_record_dir, usb_serial)?;
+    let explicit =
+        resolve_pair_record_path(&device.pair_record, &device.pair_record_dir, usb_serial)?;
+    let path = match explicit {
+        Some(p) => Some(p),
+        // Fall back to our auto-saved cache (written after a successful `Pair` in a previous run).
+        // This is what makes `cargo run -p idevice-cli -- battery` "just work" after a one-time
+        // `pair`: same UDID → same cache file → load HostID + RSA keys → no Trust prompt.
+        None if !device.no_auto_pair_record_cache => default_pair_record_save_path(usb_serial)
+            .ok()
+            .filter(|p| p.exists()),
+        None => None,
+    };
     if let Some(p) = path {
         let (keys, ids) = load_pair_record(&p)?;
         println!(
@@ -61,6 +75,50 @@ fn load_or_generate_keys_and_ids(
         let ids = pairing_ids(device.pair_ids);
         Ok((keys, ids, false))
     }
+}
+
+/// Persist the pair record under the auto-cache path so the next run skips `Pair` and goes
+/// straight to **`StartSession` → TLS** for **`battery`** / **`diagnostics`** / **`syslog`** /
+/// **`crash-reports`**.
+fn save_pair_record_after_success(
+    device: &DeviceArgs,
+    usb_serial: &str,
+    keys: &HostKeys,
+    ids: &PairingIds,
+    meta: &PairBuildMeta,
+    pair_reply_xml: &str,
+) -> Result<(), String> {
+    if device.no_save_pair_record {
+        return Ok(());
+    }
+    let escrow = lockdown_proto::parse_escrow_bag(pair_reply_xml);
+    let path = if let Some(p) = device.save_pair_record.clone() {
+        p
+    } else if let Some(d) = device.pair_record_dir.clone() {
+        d.join(format!("{}.plist", usb_serial.trim()))
+    } else {
+        default_pair_record_save_path(usb_serial)?
+    };
+    save_pair_record_plist(
+        &path,
+        keys,
+        ids,
+        &meta.device_cert_pem,
+        meta.wifi_mac.as_deref(),
+        escrow.as_deref(),
+    )?;
+    println!(
+        "[pair-record] Saved {} ({}EscrowBag, {}WiFiMACAddress). \
+         Re-run `battery` / `diagnostics` / `syslog` / `crash-reports` and it will skip `Pair`.",
+        path.display(),
+        if escrow.is_some() { "" } else { "no " },
+        if meta.wifi_mac.as_deref().is_some_and(|m| !m.is_empty()) {
+            ""
+        } else {
+            "no "
+        }
+    );
+    Ok(())
 }
 
 #[derive(clap::Args, Debug)]
@@ -97,6 +155,16 @@ struct DeviceArgs {
     /// Seconds between **`Pair`** retries while waiting for Trust / passcode (allow time to enter the device passcode).
     #[arg(long, global = true, default_value_t = 4)]
     pair_trust_poll_secs: u64,
+    /// **Reopen** the lockdown mux TCP between **`Pair`** retries (same approach as the WASM build). **Off by default** —
+    /// libimobiledevice / pymobiledevice3 keep one TCP for the whole Trust loop, and reopening makes lockdownd drop the
+    /// in-flight pair state and reply **`InvalidPairRecord`** on the next attempt. Enable only if your device requires it.
+    #[arg(long, global = true)]
+    reopen_lockdown_between_pair_retries: bool,
+    /// Write the generated `Pair` request XML to **`PATH`** (overwrite). Use this to diff our plist
+    /// against a working **pymobiledevice3** / **libimobiledevice** capture when chasing
+    /// `InvalidPairRecord`. Includes RSA private keys — keep the file out of source control.
+    #[arg(long, global = true, value_name = "PATH")]
+    dump_pair_plist: Option<std::path::PathBuf>,
     /// After a successful `Pair`, open a **new** mux pseudo-TCP to lockdownd before `StartSession` + TLS.
     /// Default is **off** (same connection as `Pair`, like **libimobiledevice**); reopen was a workaround that can prevent `StartSession` + TLS from lining up on some builds.
     #[arg(long, global = true)]
@@ -117,6 +185,24 @@ struct DeviceArgs {
     /// **`--pair-record-dir /var/lib/lockdown`** on Linux systems using **usbmuxd**).
     #[arg(long, global = true)]
     pair_record_dir: Option<PathBuf>,
+    /// After a successful **`Pair`**, write the libimobiledevice-shape pair record (host RSA
+    /// keys, certs, **`HostID`**, **`SystemBUID`**, **`EscrowBag`**, **`WiFiMACAddress`**) to
+    /// **`PATH`** instead of the default **`$XDG_CONFIG_HOME/idevice-rs/pair-records/<UDID>.plist`**.
+    /// Compatible with **`idevicepair`** / **`pymobiledevice3 --pair-record`**. Contains private
+    /// keys; **`chmod 600`** if the host is shared.
+    #[arg(long, global = true, value_name = "PATH")]
+    save_pair_record: Option<PathBuf>,
+    /// **Skip** the auto-save of the pair record after a successful **`Pair`**. Default is to save
+    /// (so the next **`battery`** / **`diagnostics`** / **`syslog`** / **`crash-reports`** run can
+    /// skip `Pair` and the iPhone Trust prompt).
+    #[arg(long, global = true, default_value_t = false)]
+    no_save_pair_record: bool,
+    /// **Skip** auto-loading the pair record from
+    /// **`$XDG_CONFIG_HOME/idevice-rs/pair-records/<UDID>.plist`** when no
+    /// **`--pair-record`** / **`--pair-record-dir`** is given. Use this to force a fresh **`Pair`**
+    /// (e.g. while debugging the pair flow).
+    #[arg(long, global = true, default_value_t = false)]
+    no_auto_pair_record_cache: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -243,19 +329,46 @@ fn cmd_mux(device: &DeviceArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// Call `Pair`; if the phone needs unlock / Trust / passcode, poll like libimobiledevice until success or timeout.
+/// Call `Pair`; if the phone needs unlock / Trust / passcode, poll like libimobiledevice / pymobiledevice3
+/// until success or timeout. The same `Pair` plist is reused across retries (rebuilding the device
+/// certificate would change its serial / validity bytes and lockdownd would reject it as `InvalidPairRecord`).
+///
+/// By default we keep the **same** mux pseudo-TCP for the whole Trust loop (libimobiledevice / pymobiledevice3 do this);
+/// reopening between attempts gives lockdownd a fresh session and it drops the in-flight pair state, replying
+/// `InvalidPairRecord` on the next attempt. The legacy reopen behaviour is still available behind
+/// `--reopen-lockdown-between-pair-retries` if your device requires it.
+///
+/// Retry cadence matches `pymobiledevice3._request_pair`: poll **every `poll_secs`** without any
+/// extra sleep on `PairingDialogResponsePending`. Some lockdownd builds invalidate the pending
+/// pair session if the host stops sending `Pair` for long enough, returning `InvalidPairRecord`
+/// on the next request (observed when we used a 15 s back-off here while pymobiledevice3 used
+/// none). Keep the loop tight: short `--pair-trust-poll-secs` (default 1 s) is the right default.
 fn pair_with_trust_wait(
     client: &mut LockdownClient,
     keys: &idevice::crypto::HostKeys,
     ids: &PairingIds,
     timeout_secs: u64,
     poll_secs: u64,
-) -> Result<String, String> {
+    reopen_between_retries: bool,
+    dump_pair_plist: Option<&std::path::Path>,
+) -> Result<(String, PairBuildMeta), String> {
     let poll = Duration::from_secs(poll_secs.max(1));
     let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
-    // One plist for the whole trust flow — rebuilding `Pair` after `PairingDialogResponsePending` can
-    // change the device certificate bytes and produce `InvalidPairRecord` on the next attempt.
-    let pair_xml = client.build_pair_request_xml(keys, ids)?;
+    let (pair_xml, meta) = client.build_pair_request_xml_with_meta(keys, ids)?;
+    if let Some(path) = dump_pair_plist {
+        std::fs::write(path, &pair_xml).map_err(|e| {
+            format!(
+                "Failed to write Pair plist dump to {}: {}",
+                path.display(),
+                e
+            )
+        })?;
+        println!(
+            "[pair] Wrote Pair request plist ({} bytes, includes private keys) to {}",
+            pair_xml.len(),
+            path.display()
+        );
+    }
     println!(
         "[pair] HostID={}  SystemBUID={}  (new RSA keys each run → use `--pair-ids random` unless you reuse the same HostID)",
         ids.host_id, ids.system_buid
@@ -283,21 +396,19 @@ fn pair_with_trust_wait(
             );
             printed_wait_hint = true;
         }
-        // A second `Pair` while the Trust sheet is still up can flip some builds to `InvalidPairRecord`;
-        // give the user time after `PairingDialogResponsePending` before re-validating.
-        let wait = if pair_out.contains("PasswordProtected") {
-            poll
-        } else if pair_out.contains("PairingDialogResponsePending") {
-            poll.max(Duration::from_secs(15))
+        // **No special back-off** on `PairingDialogResponsePending` — pymobiledevice3 doesn't sleep
+        // at all in `_request_pair` (only network RTT throttles the loop). On modern lockdownd a
+        // long pause after the dialog comes up causes the pending pair session to be invalidated,
+        // and the next `Pair` returns `InvalidPairRecord` even though our certs/HostID are fine.
+        thread::sleep(poll);
+        if reopen_between_retries {
+            println!(
+                "[pair] Re-opening mux TCP to lockdownd, then retrying `Pair` (--reopen-lockdown-between-pair-retries)…"
+            );
+            client.reopen_lockdown_tcp()?;
         } else {
-            poll
-        };
-        thread::sleep(wait);
-        // After `PairingDialogResponsePending`, a second `Pair` on the **same** mux pseudo-TCP often
-        // returns `InvalidPairRecord` on current iOS; pymobiledevice3 keeps one TCP session, but USB mux
-        // stacks differ — reopen lockdownd before each retry with the **same** `Pair` plist.
-        println!("[pair] Re-opening mux TCP to lockdownd, then retrying `Pair`…");
-        client.reopen_lockdown_tcp()?;
+            println!("[pair] Retrying `Pair` on the same mux TCP (libimobiledevice / pymobiledevice3 style)…");
+        }
         pair_out = client.pair_exchange(&pair_xml)?;
         if pair_out.contains("<key>Error</key>") {
             println!(
@@ -315,7 +426,7 @@ fn pair_with_trust_wait(
             println!("{}", pair_out);
         }
     }
-    Ok(pair_out)
+    Ok((pair_out, meta))
 }
 
 fn cmd_pair(device: &DeviceArgs) -> Result<(), String> {
@@ -325,13 +436,20 @@ fn cmd_pair(device: &DeviceArgs) -> Result<(), String> {
     if loaded {
         println!("[pair-record] Performing `Pair` using keys from the plist.");
     }
-    pair_with_trust_wait(
+    let (pair_out, meta) = pair_with_trust_wait(
         &mut client,
         &keys,
         &ids,
         device.pair_trust_timeout_secs,
         device.pair_trust_poll_secs,
+        device.reopen_lockdown_between_pair_retries,
+        device.dump_pair_plist.as_deref(),
     )?;
+    // Only persist if the device actually accepted the Pair (no `<key>Error</key>`). When
+    // `loaded` is true the record on disk already matches what just succeeded, so no rewrite.
+    if !loaded && !pair_out.contains("<key>Error</key>") {
+        save_pair_record_after_success(device, &usb_serial, &keys, &ids, &meta, &pair_out)?;
+    }
     Ok(())
 }
 
@@ -412,6 +530,7 @@ fn lockdown_pair_validate_reopen(
     device: &DeviceArgs,
     from_saved_record: bool,
     next_step: &str,
+    usb_serial: &str,
 ) -> Result<bool, String> {
     if from_saved_record {
         println!("\n=== Skip `Pair` (saved pair record) → {} ===", next_step);
@@ -420,13 +539,18 @@ fn lockdown_pair_validate_reopen(
             "\n=== Pair + {} (USB mux; same lockdownd TCP as `Pair` unless you pass reopen flags) ===",
             next_step
         );
-        let pair_out = pair_with_trust_wait(
+        let (pair_out, meta) = pair_with_trust_wait(
             client,
             keys,
             ids,
             device.pair_trust_timeout_secs,
             device.pair_trust_poll_secs,
+            device.reopen_lockdown_between_pair_retries,
+            device.dump_pair_plist.as_deref(),
         )?;
+        if !pair_out.contains("<key>Error</key>") {
+            save_pair_record_after_success(device, usb_serial, keys, ids, &meta, &pair_out)?;
+        }
         if pair_out.contains("<key>Error</key>") {
             println!(
                 "\n⚠ Pair did not succeed (see Error in the plist above). Encrypted lockdownd requires a successful pair."
@@ -482,6 +606,7 @@ fn cmd_run(device: &DeviceArgs) -> Result<(), String> {
         device,
         from_saved_record,
         "battery",
+        &usb_serial,
     )? {
         return Ok(());
     }
@@ -512,6 +637,7 @@ fn cmd_diagnostics(device: &DeviceArgs) -> Result<(), String> {
         device,
         from_saved_record,
         "diagnostics",
+        &usb_serial,
     )? {
         return Ok(());
     }
@@ -542,6 +668,7 @@ fn cmd_syslog(device: &DeviceArgs, output: Option<&Path>) -> Result<(), String> 
         device,
         from_saved_record,
         "syslog",
+        &usb_serial,
     )? {
         return Ok(());
     }
@@ -605,6 +732,7 @@ fn cmd_crash_reports(
         device,
         from_saved_record,
         "crash-reports",
+        &usb_serial,
     )? {
         return Ok(());
     }

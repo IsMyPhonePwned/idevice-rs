@@ -1,12 +1,15 @@
 //! Length-prefixed lockdown plists over **WebUSB** mux + pseudo-TCP, with optional **rustls**.
 //! Uses [`crate::web_usb_mux_hub::WebUsbMuxHub`] so secondary pseudo-TCP (e.g. AFC) shares one USB bulk pair.
 
+use std::time::Duration;
+
+use gloo_timers::future::sleep;
 use idevice_usb_core::lockdown_proto::{
-    get_value_xml, start_session_xml, PairingIds, LOCKDOWND_PORT, QUERY_TYPE_XML,
+    get_value_xml, pair_plist, parse_start_service_response, start_service_xml, start_session_xml,
+    PairingIds, GET_DEVICE_PUBLIC_KEY_XML, LOCKDOWND_PORT, QUERY_TYPE_XML,
 };
 use idevice_usb_core::TcpConn;
 use rustls::ClientConnection;
-use idevice_usb_core::lockdown_proto::{parse_start_service_response, start_service_xml};
 use wasm_bindgen::prelude::*;
 use web_sys::UsbDevice;
 
@@ -14,7 +17,7 @@ use crate::lockdown_tls_wasm::{
     handshake_tls_mux_tcp_wasm, tls_read_plain_wasm, tls_write_plain_and_flush_wasm,
     LockdownTlsClientAuth, LockdownTlsSni,
 };
-use crate::wasm_crypto::WasmHostKeys;
+use crate::wasm_crypto::{build_device_certificate, WasmHostKeys};
 use crate::wasm_log;
 use crate::web_usb::AppleEndpoints;
 use crate::web_usb_mux_hub::WebUsbMuxHub;
@@ -219,6 +222,130 @@ impl<'a> WebUsbLockdownPipe<'a> {
         self.send_lockdown_xml(&xml).await?;
         let reply = self.recv_lockdown_xml().await?;
         parse_start_service_response(&reply).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Cleartext **`GetValue DevicePublicKey`** → **PEM** (`-----BEGIN …-----`). Base64 `<data>` block
+    /// in the reply is the PEM text itself, same as `idevice::lockdown`.
+    pub async fn get_device_public_key_pem(&mut self) -> Result<String, JsValue> {
+        self.send_lockdown_xml(GET_DEVICE_PUBLIC_KEY_XML).await?;
+        let xml = self.recv_lockdown_xml().await?;
+        let start = xml
+            .find("<data>")
+            .ok_or_else(|| JsValue::from_str("GetDevicePublicKey: no <data> tag"))?
+            + 6;
+        let end = xml
+            .find("</data>")
+            .ok_or_else(|| JsValue::from_str("GetDevicePublicKey: no </data> tag"))?;
+        let b64: String = xml[start..end].chars().filter(|c| !c.is_whitespace()).collect();
+        use base64::{engine::general_purpose, Engine as _};
+        let decoded = general_purpose::STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| JsValue::from_str(&format!("GetDevicePublicKey base64: {}", e)))?;
+        String::from_utf8(decoded)
+            .map_err(|e| JsValue::from_str(&format!("GetDevicePublicKey utf8: {}", e)))
+    }
+
+    /// Build a libimobiledevice/pymobiledevice3-shaped `Pair` plist (PEM certs as `<string>`).
+    pub async fn build_pair_request_xml(
+        &mut self,
+        keys: &WasmHostKeys,
+        ids: &PairingIds,
+    ) -> Result<String, JsValue> {
+        if !keys.can_sign_device_leaf() {
+            return Err(JsValue::from_str(
+                "Pair: keys were loaded from a pair-record plist (no root CA); use generated keys",
+            ));
+        }
+        let device_pub_pem = self.get_device_public_key_pem().await?;
+        let device_cert_pem = build_device_certificate(&device_pub_pem, keys)
+            .map_err(|e| JsValue::from_str(&format!("build device cert: {}", e)))?;
+        let xml = pair_plist(
+            "iphone-wasm",
+            &ids.host_id,
+            &ids.system_buid,
+            None,
+            &device_cert_pem,
+            &keys.host_cert_pem,
+            &keys.root_cert_pem,
+            &keys.root_private_pem,
+        );
+        Ok(xml)
+    }
+
+    /// Send a `Pair` plist, return lockdownd's reply (unchanged XML).
+    pub async fn pair_exchange(&mut self, xml: &str) -> Result<String, JsValue> {
+        self.send_lockdown_xml(xml).await?;
+        self.recv_lockdown_xml().await
+    }
+
+    /// Drop the current lockdownd TCP and open a fresh mux pseudo-TCP stream.
+    /// libimobiledevice does this between `Pair` retries and before `StartSession` + TLS.
+    pub async fn reopen_lockdown_tcp(&mut self) -> Result<(), JsValue> {
+        let new_conn = self.hub.connect_tcp_additional(LOCKDOWND_PORT).await?;
+        self.conn = new_conn;
+        self.tls = None;
+        Ok(())
+    }
+
+    /// Call `Pair`; while lockdownd returns `PairingDialogResponsePending` / `PasswordProtected`,
+    /// retry the **same** Pair plist (same device cert bytes) on the **same** mux TCP every
+    /// `poll_secs`. This mirrors `pymobiledevice3._request_pair`.
+    ///
+    /// **Do not** reopen the mux pseudo-TCP between retries: lockdownd treats the new connection
+    /// as a fresh session and drops the pending pair state, so the next `Pair` returns
+    /// `InvalidPairRecord` even though the certs / `HostID` are perfectly fine. Likewise, **do
+    /// not** add a long sleep on `PairingDialogResponsePending` — some lockdownd builds invalidate
+    /// the pending pair if the host pauses too long after the dialog appears (we used to wait 15 s
+    /// here and it caused exactly that symptom).
+    pub async fn pair_with_trust_wait(
+        &mut self,
+        keys: &WasmHostKeys,
+        ids: &PairingIds,
+        timeout_secs: u32,
+        poll_secs: u32,
+    ) -> Result<String, JsValue> {
+        let pair_xml = self.build_pair_request_xml(keys, ids).await?;
+        wasm_log::info(&format!(
+            "[pair] HostID={} SystemBUID={} (Pair plist {} bytes)",
+            ids.host_id,
+            ids.system_buid,
+            pair_xml.len()
+        ));
+        let mut reply = self.pair_exchange(&pair_xml).await?;
+        let deadline_ms = js_sys::Date::now() + (timeout_secs.max(1) as f64) * 1000.0;
+        let mut logged_wait_hint = false;
+        let poll = poll_secs.max(1);
+        loop {
+            let pending = reply.contains("PairingDialogResponsePending")
+                || reply.contains("PasswordProtected");
+            if !pending {
+                break;
+            }
+            if js_sys::Date::now() >= deadline_ms {
+                return Err(JsValue::from_str(&format!(
+                    "Timed out after {}s waiting for unlock + Trust on the device. Complete the \
+                     prompt on the iPhone and retry (increase timeout if you need more time).",
+                    timeout_secs
+                )));
+            }
+            if !logged_wait_hint {
+                wasm_log::info(&format!(
+                    "[pair] Waiting for unlock / Trust / passcode on the device (timeout {}s)…",
+                    timeout_secs
+                ));
+                logged_wait_hint = true;
+            }
+            sleep(Duration::from_secs(poll as u64)).await;
+            reply = self.pair_exchange(&pair_xml).await?;
+        }
+        if reply.contains("<key>Error</key>") {
+            return Err(JsValue::from_str(&format!(
+                "Pair was rejected by lockdownd: {}",
+                reply.replace('\n', " ").chars().take(260).collect::<String>()
+            )));
+        }
+        wasm_log::info(&format!("[pair] Pair OK ({} bytes)", reply.len()));
+        Ok(reply)
     }
 }
 
