@@ -13,3 +13,4 @@ path = "src/main.rs"
 idevice = { path = "../idevice", features = ["with-clap"] }
 idevice-usb-core = { path = "../idevice-usb-core" }
 clap = { version = "4", features = ["derive"] }
+time = { version = "0.3", default-features = false, features = ["macros", "std"] }

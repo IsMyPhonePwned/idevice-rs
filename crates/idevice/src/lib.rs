@@ -33,11 +33,12 @@ macro_rules! console_error {
 pub mod afc;
 pub mod connect;
 pub mod crash_reports;
-pub mod syslog_relay;
 pub mod lockdown;
 pub mod lockdown_rustls;
 pub mod mux_link;
 pub mod pair_record;
+pub mod screenshotr;
+pub mod syslog_relay;
 pub mod usb;
 
 pub mod crypto;

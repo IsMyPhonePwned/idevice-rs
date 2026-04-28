@@ -208,6 +208,51 @@
     pre#out .err { color: var(--danger); }
     pre#out .step { color: #93a4ff; }
 
+    /* Screenshot preview */
+    #screenshot-frame {
+      margin: 0.4rem 0 0;
+      padding: 0.5rem;
+      border: 1px solid var(--line-2);
+      border-radius: 10px;
+      background:
+        repeating-conic-gradient(#0d1018 0% 25%, #0a0c12 0% 50%) 0 0 / 18px 18px,
+        #0a0c12;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 8rem;
+      max-height: 26rem;
+      overflow: hidden;
+    }
+    #screenshot-frame img {
+      max-width: 100%;
+      max-height: 24rem;
+      width: auto;
+      height: auto;
+      border-radius: 6px;
+      box-shadow: 0 6px 22px rgba(0, 0, 0, 0.55);
+      display: block;
+    }
+    #screenshot-frame img:not([src]) { display: none; }
+
+    /* Syslog stream pane */
+    pre#syslog-out {
+      margin: 0.3rem 0 0;
+      padding: 0.6rem 0.7rem;
+      border-radius: 8px;
+      background: #07080c;
+      border: 1px solid var(--line-2);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 22rem;
+      overflow: auto;
+      color: #c4c8d4;
+      line-height: 1.35;
+    }
+    pre#syslog-out .hl { background: rgba(52, 211, 153, 0.16); color: var(--text); }
+
     /* Crash reports list */
     .files-table {
       width: 100%;
@@ -498,6 +543,76 @@
       </div>
 
       <details class="toggle-block">
+        <summary>Screenshot (com.apple.mobile.screenshotr)</summary>
+        <p class="hint">
+          One-shot capture, like libimobiledevice <code>idevicescreenshot</code>. The phone returns
+          a PNG (iOS 9+) or TIFF, decoded over a secondary mux TCP + TLS via the DeviceLink
+          protocol. <strong>Requires a mounted Developer Disk Image</strong> — without it lockdownd
+          replies <code>InvalidService</code> and the button surfaces a friendly error.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn" id="btn-screenshot" data-needs="dev,auth"
+            title="StartService(com.apple.mobile.screenshotr) → secondary TLS → DeviceLink version exchange → ScreenShotRequest → save PNG/TIFF">
+            <span class="spinner" aria-hidden="true"></span><span>Take screenshot</span>
+          </button>
+          <button type="button" class="btn btn-ghost" id="btn-screenshot-save" disabled>Save…</button>
+          <button type="button" class="btn btn-ghost" id="btn-screenshot-clear" disabled>Clear</button>
+        </div>
+        <div id="screenshot-area" hidden style="margin-top:0.4rem;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Captured screenshot</h2>
+            <span class="hint" id="screenshot-status" style="margin:0;"></span>
+          </div>
+          <div id="screenshot-frame">
+            <img id="screenshot-img" alt="Device screenshot" />
+          </div>
+        </div>
+      </details>
+
+      <details class="toggle-block">
+        <summary>Syslog (com.apple.syslog_relay — live stream)</summary>
+        <div class="row two-col">
+          <div>
+            <label for="syslog-filter">Filter (case-insensitive substring)</label>
+            <input type="search" id="syslog-filter" placeholder="e.g. SpringBoard or assertiond" />
+          </div>
+          <div>
+            <label for="syslog-max-duration">Max duration (s, 0 = unlimited)</label>
+            <input type="text" id="syslog-max-duration" value="60" inputmode="numeric" />
+          </div>
+        </div>
+        <div class="row two-col">
+          <div>
+            <label for="syslog-max-bytes">Max bytes (0 = unlimited)</label>
+            <input type="text" id="syslog-max-bytes" value="2097152" inputmode="numeric" />
+          </div>
+          <div>
+            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="syslog-tail" checked /> Auto-scroll</label>
+            <label class="inline"><input type="checkbox" id="syslog-mirror" /> Mirror to log</label>
+          </div>
+        </div>
+        <p class="hint">
+          Reads block on WebUSB until the device sends data — if the phone is silent, **Stop** only takes effect
+          when the next syslog line arrives. Lock/unlock or open an app to flush the pipe.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn" id="btn-syslog" data-needs="dev,auth">
+            <span class="spinner" aria-hidden="true"></span><span>Stream syslog</span>
+          </button>
+          <button type="button" class="btn btn-ghost" id="btn-syslog-stop" disabled>Stop</button>
+          <button type="button" class="btn btn-ghost" id="btn-syslog-save" disabled title="Download the full capture (raw bytes from the device, not the filtered view)">Save…</button>
+          <button type="button" class="btn btn-ghost" id="btn-syslog-clear" disabled>Clear</button>
+        </div>
+        <div id="syslog-area" hidden style="margin-top:0.4rem;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live syslog</h2>
+            <span class="hint" id="syslog-status" style="margin:0;"></span>
+          </div>
+          <pre id="syslog-out"></pre>
+        </div>
+      </details>
+
+      <details class="toggle-block">
         <summary>Crash reports (crashreportmover + AFC)</summary>
         <div class="row two-col">
           <div>
@@ -552,6 +667,8 @@
       lockdownBattery,
       lockdownDiagnostics,
       lockdownCrashReports,
+      lockdownSyslog,
+      lockdownScreenshot,
     } from "./pkg/idevice_wasm.js";
 
     /* -----------------------------
@@ -1201,6 +1318,229 @@
         renderDeviceCard(r);
       })
     );
+
+    /* -----------------------------
+     * Screenshot capture (com.apple.mobile.screenshotr)
+     * ----------------------------- */
+    let screenshotState = { url: null, blob: null, ext: "png", mime: "image/png" };
+
+    function screenshotReset() {
+      if (screenshotState.url) {
+        URL.revokeObjectURL(screenshotState.url);
+        screenshotState.url = null;
+      }
+      screenshotState.blob = null;
+      $("screenshot-img").removeAttribute("src");
+      $("screenshot-area").hidden = true;
+      $("btn-screenshot-save").disabled = true;
+      $("btn-screenshot-clear").disabled = true;
+      $("screenshot-status").textContent = "";
+    }
+
+    $("btn-screenshot-clear").addEventListener("click", () => {
+      screenshotReset();
+      logLine("info", "Screenshot cleared");
+    });
+
+    $("btn-screenshot-save").addEventListener("click", () => {
+      if (!screenshotState.blob) return;
+      const a = document.createElement("a");
+      a.href = screenshotState.url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      a.download = `screenshot-${stamp}.${screenshotState.ext}`;
+      a.click();
+      logLine("info", `${a.download} downloaded (${fmtBytes(screenshotState.blob.size)})`);
+    });
+
+    $("btn-screenshot").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      if (busyBtn) return;
+      screenshotReset();
+      $("screenshot-area").hidden = false;
+      $("screenshot-status").textContent = "capturing…";
+      setBusy(btn, "Screenshot…");
+      logLine("step", "▶ Take screenshot (com.apple.mobile.screenshotr)");
+      try {
+        const res = await lockdownScreenshot(
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni()
+        );
+        if (!(res && res.data instanceof Uint8Array)) {
+          throw new Error("screenshot: WASM returned no image data");
+        }
+        const blob = new Blob([res.data], { type: res.mime || "image/png" });
+        const url = URL.createObjectURL(blob);
+        screenshotState.url = url;
+        screenshotState.blob = blob;
+        screenshotState.ext = res.extension || "png";
+        screenshotState.mime = res.mime || "image/png";
+        $("screenshot-img").src = url;
+        $("screenshot-status").textContent =
+          `${fmtBytes(res.byteLength | 0)} · ${res.extension || "?"}`;
+        $("btn-screenshot-save").disabled = false;
+        $("btn-screenshot-clear").disabled = false;
+        logLine("ok",
+          `✓ Screenshot ${fmtBytes(res.byteLength | 0)} (${res.extension}/${res.mime})`);
+        clearBusy(btn, true, `Screenshot ✓ (${res.extension})`);
+      } catch (e) {
+        $("screenshot-status").textContent = `error: ${e}`;
+        logLine("err", `✗ Screenshot: ${e}`);
+        clearBusy(btn, false, "Screenshot ✗");
+      }
+    });
+
+    /* -----------------------------
+     * Syslog live stream
+     * ----------------------------- */
+    let syslogState = {
+      running: false,
+      stopRequested: false,
+      bytes: 0,
+      blob: null,        // Uint8Array from the WASM call after it returns
+      lastFlushAt: 0,    // throttle DOM updates
+      pendingHtml: "",
+      filter: "",
+      mirrorToLog: false,
+      autoScroll: true,
+    };
+    function syslogReset() {
+      $("syslog-out").innerHTML = "";
+      $("syslog-area").hidden = true;
+      $("syslog-status").textContent = "";
+      $("btn-syslog-save").disabled = true;
+      $("btn-syslog-clear").disabled = true;
+      syslogState.bytes = 0;
+      syslogState.blob = null;
+      syslogState.pendingHtml = "";
+    }
+    function syslogFlushPending() {
+      if (!syslogState.pendingHtml) return;
+      const out = $("syslog-out");
+      out.insertAdjacentHTML("beforeend", syslogState.pendingHtml);
+      syslogState.pendingHtml = "";
+      // Cap on-screen size so very long captures don't blow up the DOM.
+      const MAX_NODES = 2000;
+      while (out.childNodes.length > MAX_NODES) out.removeChild(out.firstChild);
+      if (syslogState.autoScroll) out.scrollTop = out.scrollHeight;
+    }
+    function syslogHighlight(text, needle) {
+      const escaped = escapeHtml(text);
+      if (!needle) return escaped;
+      const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
+      return escaped.replace(re, (m) => `<span class="hl">${m}</span>`);
+    }
+    function syslogStatusText(extra) {
+      const dur = (((Date.now() - syslogState.startedAt) / 1000) || 0).toFixed(1);
+      return `${fmtBytes(syslogState.bytes)} · ${dur}s${extra ? " · " + extra : ""}`;
+    }
+
+    $("btn-syslog-stop").addEventListener("click", () => {
+      if (syslogState.running) {
+        syslogState.stopRequested = true;
+        $("btn-syslog-stop").disabled = true;
+        $("syslog-status").textContent = syslogStatusText("stopping…");
+      }
+    });
+    $("btn-syslog-clear").addEventListener("click", () => {
+      if (syslogState.running) return;
+      syslogReset();
+      logLine("info", "Syslog buffer cleared");
+    });
+    $("btn-syslog-save").addEventListener("click", () => {
+      if (!syslogState.blob || !syslogState.blob.length) return;
+      const blob = new Blob([syslogState.blob], { type: "text/plain" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      a.download = `syslog-${stamp}.log`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      logLine("info", `syslog-${stamp}.log downloaded (${fmtBytes(syslogState.blob.length)})`);
+    });
+
+    $("btn-syslog").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      if (busyBtn || syslogState.running) return;
+      const filter = $("syslog-filter").value.trim();
+      const mirror = $("syslog-mirror").checked;
+      const tail = $("syslog-tail").checked;
+      const maxDur = Math.max(0, parseInt($("syslog-max-duration").value || "0", 10) || 0);
+      const maxBytes = Math.max(0, parseInt($("syslog-max-bytes").value || "0", 10) || 0);
+
+      syslogReset();
+      syslogState.running = true;
+      syslogState.stopRequested = false;
+      syslogState.startedAt = Date.now();
+      syslogState.filter = filter;
+      syslogState.mirrorToLog = mirror;
+      syslogState.autoScroll = tail;
+      $("syslog-area").hidden = false;
+      $("btn-syslog-stop").disabled = false;
+      $("btn-syslog-clear").disabled = true;
+      $("btn-syslog-save").disabled = true;
+      setBusy(btn, "Syslog…");
+      logLine("step", `▶ Stream syslog${filter ? ` (filter="${filter}")` : ""}${maxDur ? ` · ${maxDur}s` : ""}${maxBytes ? ` · ${fmtBytes(maxBytes)}` : ""}`);
+
+      const onChunk = (text, totalBytes) => {
+        syslogState.bytes = totalBytes;
+        // Apply substring filter line-by-line. We split on `\n`; partial last line is held until
+        // the next chunk by piggy-backing it onto the next call (the device emits whole lines
+        // most of the time, so we can be lazy here).
+        let display = text;
+        if (filter) {
+          display = text
+            .split(/\n/)
+            .filter((l) => l.toLowerCase().includes(filter.toLowerCase()))
+            .join("\n");
+          if (display && !display.endsWith("\n")) display += "\n";
+        }
+        if (display) {
+          syslogState.pendingHtml += syslogHighlight(display, filter);
+          const now = performance.now();
+          if (now - syslogState.lastFlushAt > 100) {
+            syslogState.lastFlushAt = now;
+            syslogFlushPending();
+          }
+          if (syslogState.mirrorToLog) {
+            for (const ln of display.split(/\n/)) {
+              if (ln.length) logLine("info", ln);
+            }
+          }
+        }
+        $("syslog-status").textContent = syslogStatusText();
+        return !syslogState.stopRequested;
+      };
+
+      try {
+        const res = await lockdownSyslog(
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni(),
+          onChunk,
+          maxBytes, maxDur * 1000
+        );
+        syslogFlushPending();
+        if (res && res.data instanceof Uint8Array) {
+          syslogState.blob = res.data;
+          $("btn-syslog-save").disabled = false;
+        }
+        const reason = (res && res.stoppedReason) || "?";
+        const sslLabel = res && res.ssl ? "TLS" : "cleartext";
+        $("syslog-status").textContent = syslogStatusText(`stopped (${reason}, ${sslLabel})`);
+        logLine("ok", `✓ Syslog stopped — ${reason} · ${fmtBytes(syslogState.bytes)} · ${sslLabel}`);
+        clearBusy(btn, true, `Syslog ✓ (${reason})`);
+      } catch (e) {
+        syslogFlushPending();
+        $("syslog-status").textContent = syslogStatusText(`error: ${e}`);
+        logLine("err", `✗ Syslog: ${e}`);
+        clearBusy(btn, false, "Syslog ✗");
+      } finally {
+        syslogState.running = false;
+        $("btn-syslog-stop").disabled = true;
+        $("btn-syslog-clear").disabled = false;
+      }
+    });
 
     $("btn-crash").addEventListener("click", (ev) =>
       runBusy(ev.currentTarget, "Crash reports", async () => {

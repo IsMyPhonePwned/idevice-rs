@@ -6,7 +6,7 @@ Rust workspace for **Apple USB mux**, **lockdownd** (pairing, TLS), **device inf
 
 - **Rust** (stable), **Cargo**
 - **libusb** (for `rusb` on Linux: e.g. `libusb-1.0-0-dev`)
-- On **Linux**, if **system `usbmuxd`** already owns the phone, `pair`, `battery` / `run`, and `diagnostics` fall back to the usbmuxd socket (default `/var/run/usbmuxd`, override with `USBMUXD_SOCKET_PATH`) when direct USB open fails with “Resource busy”. **`connect`**, **`mux`**, **`syslog`**, and **`crash-reports`** still require exclusive raw USB access (or stop `usbmuxd` briefly for those) — they need a **second** mux pseudo-TCP after lockdown, which the usbmuxd-only path does not expose yet.
+- On **Linux**, if **system `usbmuxd`** already owns the phone, `pair`, `battery` / `run`, and `diagnostics` fall back to the usbmuxd socket (default `/var/run/usbmuxd`, override with `USBMUXD_SOCKET_PATH`) when direct USB open fails with “Resource busy”. **`connect`**, **`mux`**, **`syslog`**, **`screenshot`**, and **`crash-reports`** still require exclusive raw USB access (or stop `usbmuxd` briefly for those) — they need a **second** mux pseudo-TCP after lockdown, which the usbmuxd-only path does not expose yet.
 - For the **browser demo**: Chromium (WebUSB), **HTTPS or localhost**, and a user gesture for `navigator.usb.requestDevice`. **Linux:** WebUSB and the CLI are not equivalent — **`idevice-cli`** can use the **usbmuxd** socket when USB is busy; **Chromium cannot**, so you often must stop **`usbmuxd`** (and related services) so the tab can `selectConfiguration` / claim the interface, **or** keep using the native CLI with usbmuxd running.
 
 ## Build
@@ -75,11 +75,46 @@ When **usbmuxd** holds the device, **libusb** cannot switch configuration or cla
   (USB)      (Unix socket)         daemon          USB (owned by daemon)
 ```
 
-**Not** on the usbmuxd-only path today: opening a **second** mux TCP from the same tunnel after lockdown (needed for **`syslog`** and **`crash-reports`** the same way as on raw USB). Use **`idevicesyslog`** / **`idevicecrashreport`**, stop usbmuxd briefly, or extend the library with an extra usbmuxd `Connect`.
+**Not** on the usbmuxd-only path today: opening a **second** mux TCP from the same tunnel after lockdown (needed for **`syslog`**, **`screenshot`**, and **`crash-reports`** the same way as on raw USB). Use **`idevicesyslog`** / **`idevicescreenshot`** / **`idevicecrashreport`**, stop usbmuxd briefly, or extend the library with an extra usbmuxd `Connect`.
 
 ### Syslog relay (USB mux hub)
 
-**`syslog`** calls **`StartService("com.apple.syslog_relay")`**, then opens a **second** pseudo-TCP to the brokered port. With **`EnableServiceSSL`**, the relay speaks **TLS** (same client certs as lockdownd); decrypted application data is **raw syslog text** streamed to stdout or **`--output`**. Legacy cleartext relays may use **u32 big-endian length + payload** framing (as in older **libimobiledevice** `idevicesyslog`).
+**`syslog`** calls **`StartService("com.apple.syslog_relay")`**, then opens a **second** pseudo-TCP to the brokered port. With **`EnableServiceSSL`**, the relay speaks **TLS** (same client certs as lockdownd); decrypted application data is **raw syslog text** streamed to stdout / **`--output`** in the CLI, or to an `onChunk(text, totalBytes)` callback in the WASM build (`lockdownSyslog`). Legacy cleartext relays may use **u32 big-endian length + payload** framing (as in older **libimobiledevice** `idevicesyslog`); both transports are handled identically by the CLI and the browser tab.
+
+### Screenshot (`com.apple.mobile.screenshotr`, DeviceLink)
+
+**`screenshot`** captures one frame from the device, like libimobiledevice `idevicescreenshot`.
+The transport is the usual **secondary mux TCP + TLS**, but the application protocol is
+**DeviceLink**: short binary plists wrapped in `u32 BE length` frames, carrying control
+arrays that begin with a `DL*` command string.
+
+```
+HOST                                                        DEVICE
+  |   StartService(com.apple.mobile.screenshotr) → (port, ssl=true)
+  |   secondary mux TCP + TLS handshake
+  |
+  |                              ←  [ "DLMessageVersionExchange", uint(major), uint(minor) ]
+  |   [ "DLMessageVersionExchange", "DLVersionsOk", uint(400) ]      →
+  |                              ←  [ "DLMessageDeviceReady", "___EmptyParameterString___" ]
+  |
+  |   [ "DLMessageProcessMessage", { "MessageType":"ScreenShotRequest" } ]   →
+  |                              ←  [ "DLMessageProcessMessage",
+  |                                     { "MessageType":"ScreenShotReply",
+  |                                       "ScreenShotData": <PNG / TIFF bytes> } ]
+  |   [ "DLMessageDisconnect", "___EmptyParameterString___" ]              →
+```
+
+We advertise DeviceLink **400.0** (same constant libimobiledevice uses for screenshotr) and
+refuse if the device announces a higher version. The image bytes are detected by magic:
+`\x89PNG` → `.png`, `MM\x00*` / `II*\x00` → `.tiff`, anything else falls back to `.dat` so
+you can still inspect the payload.
+
+**Important**: lockdownd only publishes `screenshotr` when a **Developer Disk Image** is
+mounted on the device. Otherwise `StartService` returns `InvalidService` — both the CLI and
+the WASM build translate that into a friendly hint pointing at Xcode / `pymobiledevice3
+mounter auto-mount`. The protocol helpers (binary-plist build/parse, version check, image
+detection) live in `idevice-usb-core::screenshotr_proto` and are shared verbatim between
+`idevice::screenshotr` (native) and `idevice-wasm::screenshotr_wasm`.
 
 ### Crash reports (USB mux hub)
 
@@ -336,6 +371,7 @@ cargo run -p idevice-cli -- battery --pair-record-dir /var/lib/lockdown
 | `run` | Alias of `battery` (kept for muscle memory; same flow). |
 | `diagnostics` | Same as `battery`, then ~40 lockdown **`GetValue`** queries grouped into Identity, Network/cellular, Locale, Activation, Storage (with human-readable byte counts), iTunes, and Battery — **not** Apple sysdiagnose. |
 | `syslog` | After TLS, **`StartService` → `com.apple.syslog_relay`**, stream to stdout or `-o FILE` (like `idevicesyslog`; direct USB mux only). |
+| `screenshot [PATH]` | After TLS, **`StartService` → `com.apple.mobile.screenshotr`**, run the DeviceLink handshake and save one PNG/TIFF (like `idevicescreenshot`). Requires a mounted Developer Disk Image. |
 | `crash-reports OUT_DIR` | After TLS, open **`com.apple.crashreportmover`** + **AFC** to **`com.apple.crashreportcopymobile`**, copy logs into `OUT_DIR` (like `idevicecrashreport`). |
 
 `cargo run -p idevice-cli -- <CMD> --help` prints the full clap help with defaults.
@@ -422,6 +458,23 @@ After `StartSession` + TLS, calls **`StartService("com.apple.syslog_relay")`**, 
 cargo run -p idevice-cli -- syslog
 cargo run -p idevice-cli -- syslog -o ./iphone.syslog
 cargo run -p idevice-cli -- syslog --output /tmp/ios.log --pair-record-dir /var/lib/lockdown
+```
+
+#### `screenshot [PATH]`
+
+After `StartSession` + TLS, calls **`StartService("com.apple.mobile.screenshotr")`**, opens a **second** mux pseudo-TCP, runs the **DeviceLink** version exchange (announcing version `400.0`, same as libimobiledevice), then sends `ScreenShotRequest`. The reply’s `ScreenShotData` is decoded as **PNG** (iOS 9+) or **TIFF** by magic and saved to disk.
+
+Requires a mounted **Developer Disk Image** — without it lockdownd answers `InvalidService` and the CLI prints a hint pointing at Xcode / `pymobiledevice3 mounter auto-mount`.
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `PATH` *(positional)* | `screenshot-<UTC>.<png|tiff>` (auto-bumped on collision, like `idevicescreenshot`) | Output path or basename. If `PATH` already has an extension it is used verbatim; otherwise the detected extension is appended. |
+
+```bash
+cargo run -p idevice-cli -- screenshot                       # writes screenshot-2026-04-28-09-30-12.png
+cargo run -p idevice-cli -- screenshot ./shots/home          # writes ./shots/home.png (created on demand)
+cargo run -p idevice-cli -- screenshot lockscreen.png        # writes lockscreen.png exactly
+cargo run -p idevice-cli -- screenshot --pair-record-dir /var/lib/lockdown
 ```
 
 #### `crash-reports OUT_DIR`
@@ -588,7 +641,8 @@ See [How it works (technical)](#how-it-works-technical) for ASCII diagrams of mu
 | `StartSession` + TLS upgrade (rustls) | ✅ — same client-auth / SNI knobs as the CLI | ✅ |
 | `GetValue` snapshot (Identity, Cellular, Locale, Activation, Storage, Battery) | ✅ — sectioned report rendered as a Device snapshot card | ✅ — CLI prints raw plists |
 | `crashreportmover` + AFC crash copy | ✅ — second mux TCP + TLS, files streamed to browser | ✅ |
-| `syslog_relay` | ❌ (not yet wired in WASM) | ✅ |
+| `syslog_relay` (live stream + Save) | ✅ — second mux TCP + TLS, chunks pushed via `onChunk` callback | ✅ |
+| `mobile.screenshotr` (PNG / TIFF) | ✅ — second mux TCP + TLS, DeviceLink handshake, image bytes returned | ✅ — `screenshot [PATH]` subcommand |
 | usbmuxd Unix-socket fallback (Linux) | ❌ (Chromium can't talk to `/var/run/usbmuxd`) | ✅ |
 
 #### Index.html action map
@@ -602,6 +656,8 @@ See [How it works (technical)](#how-it-works-technical) for ASCII diagrams of mu
 | **Step 3 → Battery** | `QueryType` → `StartSession` → optional TLS → `GetValue com.apple.mobile.battery`. | `lockdownBattery` |
 | **Step 3 → Diagnostics** | Same prefix, then ~40 `GetValue` queries grouped into Identity / Cellular / Locale / Activation / Storage / Battery. Mirrors headline values into the **Device snapshot** card. | `lockdownDiagnostics` |
 | **Step 3 → Fetch with plist** | Pair-record-only path: `StartSession` + TLS + the same sectioned report (no `Pair`). | `lockdownFetchWithPlistXml` |
+| **Step 3 → Take screenshot** | After TLS, opens `com.apple.mobile.screenshotr` on a secondary mux TCP, performs the DeviceLink version exchange, then sends `ScreenShotRequest`. The reply (PNG on iOS 9+, TIFF on older releases) is shown inline as `<img>` and can be saved as `screenshot-<UTC>.<ext>`. Requires a mounted Developer Disk Image. | `lockdownScreenshot` |
+| **Step 3 → Stream syslog** | After TLS, opens `com.apple.syslog_relay` on a secondary mux TCP. Decoded text is rendered live in a pane (with optional substring filter, highlight, mirror-to-log, and auto-scroll). **Stop** ends the stream cooperatively; **Save…** downloads the captured bytes as `syslog-<UTC>.log`. | `lockdownSyslog` |
 | **Step 3 → Crash reports** | After TLS, opens `crashreportmover` + AFC and streams files into a per-file table with **Save** / **Save all** buttons. | `lockdownCrashReports` |
 
 #### TLS knobs (advanced toggle in step 3)

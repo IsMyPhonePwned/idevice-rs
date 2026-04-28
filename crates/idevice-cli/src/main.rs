@@ -227,6 +227,11 @@ enum Commands {
         #[arg(short = 'o', long)]
         output: Option<PathBuf>,
     },
+    /// Pair, **`StartSession` → TLS**, then **`com.apple.mobile.screenshotr`** (DeviceLink) — capture one PNG/TIFF, like **`idevicescreenshot`**. Requires a mounted Developer Disk Image.
+    Screenshot {
+        /// Output path or filename prefix. If omitted, writes `screenshot-<UTC-timestamp>.<ext>` in the current directory. If the path has no extension we append `.png`/`.tiff` based on the bytes returned.
+        path: Option<PathBuf>,
+    },
     /// Pair, **`StartSession` → TLS**, then **`com.apple.crashreportmover`** + **`com.apple.crashreportcopymobile`** (AFC), like **`idevicecrashreport`**.
     CrashReports {
         /// Output directory on the host (ignored with **`--remove-all`**; that mode uses `.` on host).
@@ -261,6 +266,7 @@ fn run() -> Result<(), String> {
         Commands::Battery | Commands::Run => cmd_run(&cli.device),
         Commands::Diagnostics => cmd_diagnostics(&cli.device),
         Commands::Syslog { output } => cmd_syslog(&cli.device, output.as_deref()),
+        Commands::Screenshot { path } => cmd_screenshot(&cli.device, path.as_deref()),
         Commands::CrashReports {
             out_dir,
             no_keep,
@@ -702,6 +708,102 @@ fn cmd_syslog(device: &DeviceArgs, output: Option<&Path>) -> Result<(), String> 
             )
         }
     }
+}
+
+fn cmd_screenshot(device: &DeviceArgs, path: Option<&Path>) -> Result<(), String> {
+    let (bus, addr, serial) = resolve_device_args(device)?;
+    let (usb_serial, mut client) = open_lockdown_for_cli(connect_args(device))?;
+    if let Ok(mut usb) = open_apple(bus, addr, serial) {
+        println!(
+            "=== Phone (identified on USB) ===\n{}",
+            format_apple_device_identity(&mut usb)?
+        );
+    } else {
+        println!(
+            "=== Phone (via usbmuxd) ===\nIdentifier (pair-record name): {}",
+            usb_serial
+        );
+    }
+    let (keys, ids, from_saved_record) = load_or_generate_keys_and_ids(device, &usb_serial)?;
+    if !lockdown_pair_validate_reopen(
+        &mut client,
+        &keys,
+        &ids,
+        device,
+        from_saved_record,
+        "screenshot",
+        &usb_serial,
+    )? {
+        return Ok(());
+    }
+    println!(
+        "\n=== Screenshot (`com.apple.mobile.screenshotr`, like idevicescreenshot) ==="
+    );
+    establish_lockdown_tls_session(&mut client, &keys, &ids, device, "[screenshot]")?;
+    let shot = idevice::screenshotr::take_screenshot(
+        &mut client,
+        &keys,
+        device.lockdown_tls_client_auth,
+        device.lockdown_tls_sni,
+        device.lockdown_tls_debug,
+    )?;
+
+    let out_path = resolve_screenshot_path(path, shot.extension)?;
+    std::fs::write(&out_path, &shot.data)
+        .map_err(|e| format!("write {}: {}", out_path.display(), e))?;
+    println!(
+        "Screenshot saved to {} ({} bytes, {})",
+        out_path.display(),
+        shot.data.len(),
+        shot.extension
+    );
+    if shot.extension == "dat" {
+        println!(
+            "Note: device returned an unrecognized image format (not PNG or TIFF); \
+             saved as `{}` so you can inspect the raw bytes.",
+            out_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Mirror `idevicescreenshot.c::get_image_filename`:
+/// - if the user gave a path with an extension, use it verbatim;
+/// - if they gave a basename without extension, append `.<ext>`;
+/// - otherwise pick `screenshot-<UTC>.<ext>` and bump `-2`, `-3`, … on collision.
+fn resolve_screenshot_path(input: Option<&Path>, ext: &'static str) -> Result<PathBuf, String> {
+    if let Some(p) = input {
+        let has_ext = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.contains('.'))
+            .unwrap_or(false);
+        if has_ext {
+            return Ok(p.to_path_buf());
+        }
+        let mut owned = p.to_path_buf();
+        owned.set_extension(ext);
+        return Ok(owned);
+    }
+    let now = time::OffsetDateTime::now_utc();
+    let basename = idevice_usb_core::screenshotr_proto::default_screenshot_basename(
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    );
+    let mut candidate = PathBuf::from(format!("{basename}.{ext}"));
+    for i in 2u32..(1 << 16) {
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        candidate = PathBuf::from(format!("{basename}-{i}.{ext}"));
+    }
+    Err(format!(
+        "screenshot: could not find a unique filename starting with {basename}"
+    ))
 }
 
 fn cmd_crash_reports(

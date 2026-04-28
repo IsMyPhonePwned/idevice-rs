@@ -63,9 +63,18 @@ pub fn default_pair_record_save_dir() -> Result<PathBuf, String> {
     Ok(base.join("idevice-rs").join("pair-records"))
 }
 
-/// **`<save-dir>/<usb_serial>.plist`** under [`default_pair_record_save_dir`].
+/// **`<save-dir>/<usb_serial>.plist`** under [`default_pair_record_save_dir`]. Strips
+/// control bytes, slashes, and whitespace from the serial so a noisy USB string descriptor
+/// (some Apple devices pad with NUL — see `usb::sanitize_usb_descriptor_string`) never
+/// produces a path that `std::fs::write` rejects with `file name contained an unexpected
+/// NUL byte`.
 pub fn default_pair_record_save_path(usb_serial: &str) -> Result<PathBuf, String> {
-    let serial = usb_serial.trim();
+    let serial: String = usb_serial
+        .chars()
+        .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
+        .collect::<String>()
+        .trim()
+        .to_string();
     if serial.is_empty() {
         return Err("Empty USB serial — cannot derive a default pair-record path".into());
     }
@@ -127,4 +136,34 @@ pub fn save_pair_record_plist(
         .map_err(|e| format!("plist xml encode: {}", e))?;
     std::fs::write(path, &buf).map_err(|e| format!("write {}: {}", path.display(), e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// rusb has been observed returning a USB serial with a trailing NUL byte on some
+    /// Apple devices; without sanitization this becomes a path that `std::fs::write`
+    /// rejects with "file name contained an unexpected NUL byte". Make sure
+    /// [`default_pair_record_save_path`] strips controls so the resulting filename is
+    /// safe for `CString`-based syscalls.
+    #[test]
+    fn save_path_strips_nul_and_control_bytes_from_serial() {
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/idevice-rs-test-config");
+        let p = default_pair_record_save_path("00008150000A62342613401C\0").unwrap();
+        let s = p.to_str().unwrap();
+        assert!(
+            !s.as_bytes().contains(&0),
+            "save path still contains a NUL byte: {:?}",
+            s
+        );
+        assert!(s.ends_with("00008150000A62342613401C.plist"), "got {}", s);
+    }
+
+    #[test]
+    fn save_path_rejects_empty_or_only_control_serial() {
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/idevice-rs-test-config");
+        assert!(default_pair_record_save_path("").is_err());
+        assert!(default_pair_record_save_path("\0\0\0").is_err());
+    }
 }

@@ -76,7 +76,22 @@ fn read_string_descriptor_simple(
         return None;
     }
     let h = dev.open().ok()?;
-    h.read_string_descriptor_ascii(idx).ok()
+    h.read_string_descriptor_ascii(idx)
+        .ok()
+        .map(|s| sanitize_usb_descriptor_string(&s))
+}
+
+/// rusb's `read_string_descriptor_ascii` can return trailing or interior NUL bytes when the
+/// device pads the UTF‑16 buffer (Apple devices have done this on iOS 17). Those bytes break
+/// downstream `CString`/path APIs (`std::fs::write` returns `file name contained an unexpected
+/// NUL byte`), so we strip controls and trim whitespace before any consumer (USB ID printer,
+/// pair-record filename, …) sees the string.
+pub(crate) fn sanitize_usb_descriptor_string(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// Find (config, iface, alt, bulk endpoints) by scanning all configurations.
@@ -282,14 +297,17 @@ pub fn read_usb_strings(usb: &mut AppleUsb) -> Result<(String, String, String), 
     let prod = desc
         .product_string_index()
         .and_then(|i| usb.handle.read_string_descriptor_ascii(i).ok())
+        .map(|s| sanitize_usb_descriptor_string(&s))
         .unwrap_or_default();
     let mfr = desc
         .manufacturer_string_index()
         .and_then(|i| usb.handle.read_string_descriptor_ascii(i).ok())
+        .map(|s| sanitize_usb_descriptor_string(&s))
         .unwrap_or_default();
     let ser = desc
         .serial_number_string_index()
         .and_then(|i| usb.handle.read_string_descriptor_ascii(i).ok())
+        .map(|s| sanitize_usb_descriptor_string(&s))
         .unwrap_or_default();
     Ok((mfr, prod, ser))
 }
