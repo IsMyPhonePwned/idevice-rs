@@ -142,6 +142,14 @@ pub fn save_pair_record_plist(
 mod tests {
     use super::*;
 
+    /// Several tests in this module mutate `XDG_CONFIG_HOME` / `HOME` — Cargo runs tests in
+    /// parallel by default, so we serialize all env-touching tests behind one mutex to keep
+    /// observations deterministic.
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     /// rusb has been observed returning a USB serial with a trailing NUL byte on some
     /// Apple devices; without sanitization this becomes a path that `std::fs::write`
     /// rejects with "file name contained an unexpected NUL byte". Make sure
@@ -149,6 +157,7 @@ mod tests {
     /// safe for `CString`-based syscalls.
     #[test]
     fn save_path_strips_nul_and_control_bytes_from_serial() {
+        let _g = env_lock().lock().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", "/tmp/idevice-rs-test-config");
         let p = default_pair_record_save_path("00008150000A62342613401C\0").unwrap();
         let s = p.to_str().unwrap();
@@ -162,8 +171,186 @@ mod tests {
 
     #[test]
     fn save_path_rejects_empty_or_only_control_serial() {
+        let _g = env_lock().lock().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", "/tmp/idevice-rs-test-config");
         assert!(default_pair_record_save_path("").is_err());
         assert!(default_pair_record_save_path("\0\0\0").is_err());
+    }
+
+    /// Both branches of `default_pair_record_save_dir()` are exercised together so we don't
+    /// race with the other tests that also mutate `XDG_CONFIG_HOME` / `HOME`.
+    #[test]
+    fn default_pair_record_save_dir_xdg_then_home_fallback() {
+        let _g = env_lock().lock().unwrap();
+        let prev_x = std::env::var_os("XDG_CONFIG_HOME");
+        let prev_h = std::env::var_os("HOME");
+
+        std::env::set_var("XDG_CONFIG_HOME", "/tmp/idevice-rs-test-cfg-x");
+        let p = default_pair_record_save_dir().unwrap();
+        assert!(p.starts_with("/tmp/idevice-rs-test-cfg-x"));
+        assert!(p.ends_with("idevice-rs/pair-records"));
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", "/tmp/idevice-rs-fake-home");
+        let p = default_pair_record_save_dir().unwrap();
+        assert!(p.starts_with("/tmp/idevice-rs-fake-home/.config"));
+        assert!(p.ends_with("idevice-rs/pair-records"));
+
+        match prev_x {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match prev_h {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn resolve_pair_record_path_with_explicit_existing_file() {
+        let tmp = std::env::temp_dir().join("idevice-rs-pr-explicit.plist");
+        std::fs::write(&tmp, b"x").unwrap();
+        let r = resolve_pair_record_path(
+            &Some(tmp.clone()),
+            &None,
+            "ignored-serial",
+        )
+        .unwrap();
+        assert_eq!(r, Some(tmp.clone()));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_pair_record_path_errors_when_explicit_missing() {
+        let tmp = std::path::PathBuf::from("/tmp/idevice-rs-does-not-exist.plist");
+        let _ = std::fs::remove_file(&tmp);
+        let err = resolve_pair_record_path(&Some(tmp.clone()), &None, "abc")
+            .unwrap_err();
+        assert!(err.contains("--pair-record"));
+    }
+
+    #[test]
+    fn resolve_pair_record_path_uses_dir_when_serial_file_present() {
+        let dir = std::env::temp_dir().join("idevice-rs-pr-dir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let serial = "TESTSERIAL12345";
+        let p = dir.join(format!("{}.plist", serial));
+        std::fs::write(&p, b"x").unwrap();
+        let r = resolve_pair_record_path(&None, &Some(dir.clone()), serial).unwrap();
+        assert_eq!(r, Some(p.clone()));
+        std::fs::remove_file(&p).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_pair_record_path_returns_none_when_no_dir_and_no_explicit() {
+        let r = resolve_pair_record_path(&None, &None, "abc").unwrap();
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn resolve_pair_record_path_errors_when_dir_set_but_serial_file_missing() {
+        let dir = std::env::temp_dir().join("idevice-rs-pr-dir-empty");
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = resolve_pair_record_path(&None, &Some(dir.clone()), "MISSING").unwrap_err();
+        assert!(err.contains("MISSING.plist"));
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    /// Round-trip the on-disk pair record format. We craft a fake [`HostKeys`] with PEM strings
+    /// (no real RSA — `save_pair_record_plist` only treats them as bytes) and verify the
+    /// resulting plist re-reads as the same dict.
+    #[test]
+    fn save_pair_record_plist_round_trips_through_xml() {
+        let keys = HostKeys {
+            private_key_pem: "-----BEGIN PRIVATE KEY-----\nHOST\n-----END PRIVATE KEY-----\n".into(),
+            host_cert_pem: "-----BEGIN CERTIFICATE-----\nHOST_CERT\n-----END CERTIFICATE-----\n"
+                .into(),
+            root_cert_pem: "-----BEGIN CERTIFICATE-----\nROOT_CERT\n-----END CERTIFICATE-----\n"
+                .into(),
+            root_private_pem: "-----BEGIN PRIVATE KEY-----\nROOT\n-----END PRIVATE KEY-----\n"
+                .into(),
+            host_cert_der: vec![1, 2, 3],
+            root_cert_der: vec![4, 5, 6],
+            private_key_der: vec![7, 8, 9],
+            root_private_der: vec![10, 11, 12],
+            root_ca: None,
+        };
+        let ids = idevice_usb_core::PairingIds {
+            host_id: "HOST-ID-XYZ".into(),
+            system_buid: "BUID-ZZZ".into(),
+        };
+        let path = std::env::temp_dir().join("idevice-rs-roundtrip.plist");
+        let _ = std::fs::remove_file(&path);
+
+        save_pair_record_plist(
+            &path,
+            &keys,
+            &ids,
+            "-----BEGIN CERTIFICATE-----\nDEVICE\n-----END CERTIFICATE-----\n",
+            Some("aa:bb:cc:dd:ee:ff"),
+            Some(b"escrow-bytes"),
+        )
+        .unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        let v: plist::Value = plist::from_bytes(&raw).unwrap();
+        let dict = v.as_dictionary().unwrap();
+        assert_eq!(dict.get("HostID").unwrap().as_string().unwrap(), "HOST-ID-XYZ");
+        assert_eq!(dict.get("SystemBUID").unwrap().as_string().unwrap(), "BUID-ZZZ");
+        assert_eq!(
+            dict.get("WiFiMACAddress").unwrap().as_string().unwrap(),
+            "aa:bb:cc:dd:ee:ff"
+        );
+        assert_eq!(
+            dict.get("EscrowBag").unwrap().as_data().unwrap(),
+            b"escrow-bytes"
+        );
+        // Cert / key fields are CFData (PEM bytes) — same shape libimobiledevice writes.
+        for k in [
+            "DeviceCertificate",
+            "HostCertificate",
+            "HostPrivateKey",
+            "RootCertificate",
+            "RootPrivateKey",
+        ] {
+            let bytes = dict.get(k).unwrap().as_data().unwrap();
+            assert!(
+                std::str::from_utf8(bytes)
+                    .unwrap()
+                    .contains("-----BEGIN"),
+                "{} should be PEM bytes",
+                k
+            );
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn save_pair_record_plist_skips_empty_wifi_and_escrow() {
+        let keys = HostKeys {
+            private_key_pem: "P".into(),
+            host_cert_pem: "H".into(),
+            root_cert_pem: "R".into(),
+            root_private_pem: "RP".into(),
+            host_cert_der: vec![],
+            root_cert_der: vec![],
+            private_key_der: vec![],
+            root_private_der: vec![],
+            root_ca: None,
+        };
+        let ids = idevice_usb_core::PairingIds {
+            host_id: "H".into(),
+            system_buid: "B".into(),
+        };
+        let path = std::env::temp_dir().join("idevice-rs-skip-optional.plist");
+        let _ = std::fs::remove_file(&path);
+
+        save_pair_record_plist(&path, &keys, &ids, "D", Some(""), Some(b"")).unwrap();
+        let v: plist::Value = plist::from_bytes(&std::fs::read(&path).unwrap()).unwrap();
+        let d = v.as_dictionary().unwrap();
+        assert!(d.get("WiFiMACAddress").is_none());
+        assert!(d.get("EscrowBag").is_none());
+        std::fs::remove_file(&path).ok();
     }
 }

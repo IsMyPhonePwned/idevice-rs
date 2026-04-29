@@ -1049,6 +1049,276 @@ mod tests {
     }
 
     #[test]
+    fn uuid_v4_is_uppercase_rfc4122_shape() {
+        let id = new_uuid_v4();
+        assert_eq!(id.len(), 36);
+        let dashes: Vec<usize> = id.match_indices('-').map(|(i, _)| i).collect();
+        assert_eq!(dashes, vec![8, 13, 18, 23], "RFC 4122 dash positions");
+        // All hex chars must be A-F0-9 (libimobiledevice generate_uuid emits uppercase only).
+        for c in id.chars() {
+            assert!(
+                c == '-' || c.is_ascii_digit() || ('A'..='F').contains(&c),
+                "non-uppercase hex char in UUID: {:?}",
+                c
+            );
+        }
+        // Version nibble = 4
+        assert_eq!(&id[14..15], "4");
+        // Variant (RFC 4122) is one of 8 9 A B
+        assert!("89AB".contains(&id[19..20]));
+        // Two distinct calls produce distinct UUIDs (probabilistically certain).
+        assert_ne!(id, new_uuid_v4());
+    }
+
+    #[test]
+    fn pairing_ids_legacy_uses_fixed_host_and_system() {
+        let p = PairingIds::legacy_host_and_system();
+        assert_eq!(p.host_id, HOST_ID);
+        assert_eq!(p.system_buid, HOST_ID);
+    }
+
+    #[test]
+    fn pairing_ids_v4_generates_two_distinct_uuids() {
+        let p = PairingIds::new_v4();
+        assert_eq!(p.host_id.len(), 36);
+        assert_eq!(p.system_buid.len(), 36);
+        assert_ne!(p.host_id, p.system_buid);
+    }
+
+    #[test]
+    fn start_session_enable_ssl_detects_true_and_integer_one() {
+        let yes_bool = "<dict><key>EnableSessionSSL</key><true/></dict>";
+        let yes_bool_space = "<dict><key>EnableSessionSSL</key>  <true /></dict>";
+        let yes_int = "<dict><key>EnableSessionSSL</key><integer>1</integer></dict>";
+        let no = "<dict><key>EnableSessionSSL</key><false/></dict>";
+        let unrelated_true = "<dict><key>HostIsTrusted</key><true/></dict>";
+
+        assert!(start_session_enable_ssl(yes_bool));
+        assert!(start_session_enable_ssl(yes_bool_space));
+        assert!(start_session_enable_ssl(yes_int));
+        assert!(!start_session_enable_ssl(no));
+        assert!(
+            !start_session_enable_ssl(unrelated_true),
+            "must not treat any nearby <true/> as SSL flag"
+        );
+    }
+
+    #[test]
+    fn parse_get_value_string_decodes_string_and_mac() {
+        let s = "<plist><dict><key>Value</key><string>iPhone</string></dict></plist>";
+        assert_eq!(parse_get_value_string(s).as_deref(), Some("iPhone"));
+
+        // 6-byte WiFiAddress encoded base64 → AA:BB:CC:DD:EE:FF
+        // base64("\xaa\xbb\xcc\xdd\xee\xff") = "qrvM3e7/"
+        let mac =
+            r#"<plist><dict><key>Value</key><data>qrvM3e7/</data></dict></plist>"#;
+        assert_eq!(
+            parse_get_value_string(mac).as_deref(),
+            Some("aa:bb:cc:dd:ee:ff")
+        );
+    }
+
+    #[test]
+    fn parse_get_value_string_returns_none_when_no_value_key() {
+        assert!(parse_get_value_string("<plist><dict></dict></plist>").is_none());
+    }
+
+    #[test]
+    fn xml_escape_string_handles_all_special_chars() {
+        assert_eq!(
+            xml_escape_string(r#"a&b<c>d"e'f"#),
+            "a&amp;b&lt;c&gt;d&quot;e&apos;f"
+        );
+    }
+
+    #[test]
+    fn start_session_xml_includes_host_and_system_buid() {
+        let xml = start_session_xml("HOST-A", "BUID-B");
+        assert!(xml.contains("<key>HostID</key><string>HOST-A</string>"));
+        assert!(xml.contains("<key>SystemBUID</key><string>BUID-B</string>"));
+        assert!(xml.contains("<key>Request</key><string>StartSession</string>"));
+        // Plist must round-trip through the parser without errors.
+        let _: plist::Value = plist::from_bytes(xml.as_bytes()).expect("valid plist");
+    }
+
+    #[test]
+    fn start_session_xml_legacy_uses_fixed_host_id_for_both_fields() {
+        let xml = start_session_xml_legacy();
+        assert!(xml.contains(&format!("<string>{}</string>", HOST_ID)));
+        assert!(xml.contains("StartSession"));
+    }
+
+    #[test]
+    fn get_value_xml_omits_empty_domain_and_key() {
+        let only_key = get_value_xml("", "DeviceName");
+        assert!(only_key.contains("<key>Key</key><string>DeviceName</string>"));
+        assert!(!only_key.contains("<key>Domain</key>"));
+
+        let domain_only = get_value_xml("com.apple.disk_usage", "");
+        assert!(domain_only.contains("<key>Domain</key><string>com.apple.disk_usage</string>"));
+        assert!(!domain_only.contains("<key>Key</key>"));
+    }
+
+    #[test]
+    fn start_service_xml_escapes_service_name() {
+        let xml = start_service_xml("com.apple.<weird>");
+        assert!(xml.contains("&lt;weird&gt;"));
+        let _: plist::Value = plist::from_bytes(xml.as_bytes()).expect("valid plist");
+    }
+
+    #[test]
+    fn parse_lockdown_error_string_extracts_error_value() {
+        let xml = r#"<dict><key>Error</key><string>InvalidPairRecord</string></dict>"#;
+        assert_eq!(
+            parse_lockdown_error_string(xml).as_deref(),
+            Some("InvalidPairRecord")
+        );
+        assert!(parse_lockdown_error_string("<dict></dict>").is_none());
+    }
+
+    #[test]
+    fn parse_escrow_bag_decodes_base64_with_whitespace() {
+        // base64("hello world") = "aGVsbG8gd29ybGQ="; insert whitespace like CFData.
+        let xml = r#"<plist><dict>
+<key>EscrowBag</key>
+<data>
+aGVsbG8g
+d29ybGQ=
+</data>
+</dict></plist>"#;
+        assert_eq!(parse_escrow_bag(xml).as_deref(), Some(&b"hello world"[..]));
+    }
+
+    #[test]
+    fn parse_escrow_bag_returns_none_when_no_escrow_bag_key() {
+        assert!(parse_escrow_bag("<dict></dict>").is_none());
+    }
+
+    #[test]
+    fn parse_start_service_response_handles_port_ssl_and_errors() {
+        let ok_ssl = r#"<plist><dict>
+<key>Port</key><integer>49152</integer>
+<key>EnableServiceSSL</key><true/>
+</dict></plist>"#;
+        let (port, ssl) = parse_start_service_response(ok_ssl).unwrap();
+        assert_eq!(port, 49152);
+        assert!(ssl);
+
+        let ok_no_ssl = r#"<plist><dict>
+<key>Port</key><integer>50001</integer>
+</dict></plist>"#;
+        let (port, ssl) = parse_start_service_response(ok_no_ssl).unwrap();
+        assert_eq!(port, 50001);
+        assert!(!ssl);
+
+        let err = r#"<dict><key>Error</key><string>InvalidService</string></dict>"#;
+        assert!(parse_start_service_response(err)
+            .unwrap_err()
+            .contains("InvalidService"));
+
+        let no_port = r#"<dict><key>Banana</key><integer>1</integer></dict>"#;
+        assert!(parse_start_service_response(no_port).is_err());
+
+        let bad_port = r#"<dict><key>Port</key><integer>0</integer></dict>"#;
+        assert!(parse_start_service_response(bad_port).is_err());
+
+        let oversize = r#"<dict><key>Port</key><integer>70000</integer></dict>"#;
+        assert!(parse_start_service_response(oversize).is_err());
+    }
+
+    #[test]
+    fn validate_pair_plist_includes_optional_wifi_mac() {
+        let pem = "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----\n";
+        let with_mac = validate_pair_plist(
+            "host-id",
+            "buid",
+            Some("aa:bb:cc:dd:ee:ff"),
+            pem,
+            pem,
+            pem,
+        );
+        assert!(with_mac.contains("<key>WiFiMACAddress</key><string>aa:bb:cc:dd:ee:ff</string>"));
+        assert!(with_mac.contains("<key>Request</key><string>ValidatePair</string>"));
+        assert!(
+            !with_mac.contains("<key>PairingOptions</key>"),
+            "ValidatePair must not include PairingOptions"
+        );
+
+        let without = validate_pair_plist("host", "buid", None, pem, pem, pem);
+        assert!(!without.contains("WiFiMACAddress"));
+
+        // Both round-trip through the plist parser.
+        let _: plist::Value = plist::from_bytes(with_mac.as_bytes()).unwrap();
+        let _: plist::Value = plist::from_bytes(without.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn pair_plist_legacy_uses_fixed_host_id() {
+        let pem = "-----BEGIN CERTIFICATE-----\nABC\n-----END CERTIFICATE-----\n";
+        let key = "-----BEGIN PRIVATE KEY-----\nXYZ\n-----END PRIVATE KEY-----\n";
+        let xml = pair_plist_legacy(pem, pem, pem, key);
+        assert!(xml.contains(&format!("<key>HostID</key><string>{}</string>", HOST_ID)));
+        assert!(xml.contains(&format!("<key>SystemBUID</key><string>{}</string>", HOST_ID)));
+    }
+
+    #[test]
+    fn device_report_section_for_maps_known_keys() {
+        assert_eq!(device_report_section_for("", "DeviceName"), "Identity");
+        assert_eq!(device_report_section_for("", "WiFiAddress"), "Network / cellular");
+        assert_eq!(device_report_section_for("", "TimeZone"), "Locale / time");
+        assert_eq!(
+            device_report_section_for("com.apple.international", "Locale"),
+            "Locale / time"
+        );
+        assert_eq!(
+            device_report_section_for("", "ActivationState"),
+            "Activation / security"
+        );
+        assert_eq!(
+            device_report_section_for("com.apple.disk_usage", "TotalDiskCapacity"),
+            "Storage (disk_usage)"
+        );
+        assert_eq!(
+            device_report_section_for("com.apple.mobile.battery", ""),
+            "Battery (com.apple.mobile.battery)"
+        );
+        assert_eq!(
+            device_report_section_for("com.apple.mobile.iTunes", "iTunesHasConnected"),
+            "iTunes / sync"
+        );
+        assert_eq!(device_report_section_for("", "SomeUnknown"), "Other");
+    }
+
+    #[test]
+    fn device_report_section_order_lists_battery_last_known_section() {
+        let order = device_report_section_order();
+        let bat = order
+            .iter()
+            .position(|s| *s == "Battery (com.apple.mobile.battery)")
+            .unwrap();
+        let other = order.iter().position(|s| *s == "Other").unwrap();
+        assert!(bat < other, "Battery should render before Other");
+    }
+
+    #[test]
+    fn diagnostic_get_values_table_is_unique_and_well_formed() {
+        // No (label, domain, key) triple repeats — collision would silently lose a row.
+        let mut seen = std::collections::HashSet::new();
+        for (label, domain, key) in LOCKDOWN_DIAGNOSTIC_GET_VALUES {
+            assert!(!label.is_empty(), "diagnostic row has empty label");
+            assert!(seen.insert((*label, *domain, *key)), "duplicate row {:?}", label);
+        }
+        // Common identity keys we rely on must be present.
+        let labels: Vec<&str> = LOCKDOWN_DIAGNOSTIC_GET_VALUES
+            .iter()
+            .map(|(l, _, _)| *l)
+            .collect();
+        for needed in ["DeviceName", "ProductVersion", "WiFiAddress"] {
+            assert!(labels.contains(&needed), "missing {} in diagnostic table", needed);
+        }
+    }
+
+    #[test]
     fn report_groups_and_annotates_storage() {
         let identity_xml = r#"<plist><dict><key>Value</key><string>iPhone15,3</string></dict></plist>"#;
         let storage_xml = r#"<plist><dict><key>Value</key><integer>256000000000</integer></dict></plist>"#;

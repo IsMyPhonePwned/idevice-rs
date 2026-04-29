@@ -43,3 +43,67 @@ pub fn load_pair_record_plist_bytes(data: &[u8]) -> Result<(HostKeys, PairingIds
     };
     Ok((keys, ids))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_min_dict_xml(extra: &str) -> Vec<u8> {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+{}
+</dict>
+</plist>"#,
+            extra
+        )
+        .into_bytes()
+    }
+
+    fn expect_err(r: Result<(HostKeys, PairingIds), String>) -> String {
+        match r {
+            Ok(_) => panic!("expected an error, got Ok"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn rejects_non_dictionary_root() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array><string>x</string></array></plist>"#;
+        let err = expect_err(load_pair_record_plist_bytes(xml));
+        assert!(err.contains("dictionary"));
+    }
+
+    #[test]
+    fn rejects_non_plist_input() {
+        let err = expect_err(load_pair_record_plist_bytes(b"not a plist"));
+        assert!(err.starts_with("plist:"));
+    }
+
+    #[test]
+    fn rejects_dict_missing_required_fields() {
+        let xml = build_min_dict_xml(
+            r#"<key>HostID</key><string>HID</string>
+<key>SystemBUID</key><string>BUID</string>"#,
+        );
+        let err = expect_err(load_pair_record_plist_bytes(&xml));
+        assert!(err.contains("HostPrivateKey") || err.contains("missing"));
+    }
+
+    #[test]
+    fn rejects_empty_required_field() {
+        // All fields present but HostID empty — `require_field` filters empty values out.
+        let xml = build_min_dict_xml(
+            r#"<key>HostID</key><string></string>
+<key>SystemBUID</key><string>B</string>
+<key>HostPrivateKey</key><string>X</string>
+<key>HostCertificate</key><string>X</string>
+<key>RootCertificate</key><string>X</string>
+<key>RootPrivateKey</key><string>X</string>"#,
+        );
+        let err = expect_err(load_pair_record_plist_bytes(&xml));
+        assert!(err.contains("HostID"));
+    }
+}

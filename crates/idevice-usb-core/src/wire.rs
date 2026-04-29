@@ -74,3 +74,93 @@ pub fn build_mux_setup_packet_v2() -> [u8; 17] {
     b[16] = 0x07;
     b
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_request_matches_usbmuxd_layout() {
+        let v = build_mux_version_request();
+        assert_eq!(v.len(), 20);
+        // protocol = MUX_PROTO_VERSION (0)
+        assert_eq!(u32::from_be_bytes(v[0..4].try_into().unwrap()), 0);
+        // declared length = 20
+        assert_eq!(u32::from_be_bytes(v[4..8].try_into().unwrap()), 20);
+        // major = 2
+        assert_eq!(u32::from_be_bytes(v[8..12].try_into().unwrap()), 2);
+        // minor = 0
+        assert_eq!(u32::from_be_bytes(v[12..16].try_into().unwrap()), 0);
+        // tail = 0
+        assert_eq!(u32::from_be_bytes(v[16..20].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn parse_version_response_accepts_v1_and_v2() {
+        // Build a fake VERSION reply: protocol=0 length=20 major=2 minor=0 …
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&MUX_PROTO_VERSION.to_be_bytes());
+        buf[4..8].copy_from_slice(&20u32.to_be_bytes());
+        buf[8..12].copy_from_slice(&2u32.to_be_bytes());
+        buf[12..16].copy_from_slice(&0u32.to_be_bytes());
+        let (maj, min) = parse_mux_version_response(&buf).unwrap();
+        assert_eq!((maj, min), (2, 0));
+
+        buf[8..12].copy_from_slice(&1u32.to_be_bytes());
+        let (maj, _) = parse_mux_version_response(&buf).unwrap();
+        assert_eq!(maj, 1);
+    }
+
+    #[test]
+    fn parse_version_response_rejects_short_or_wrong_proto() {
+        assert!(parse_mux_version_response(&[0u8; 4]).is_err());
+
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&7u32.to_be_bytes());
+        buf[4..8].copy_from_slice(&20u32.to_be_bytes());
+        assert!(parse_mux_version_response(&buf).is_err());
+
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&MUX_PROTO_VERSION.to_be_bytes());
+        buf[4..8].copy_from_slice(&20u32.to_be_bytes());
+        buf[8..12].copy_from_slice(&7u32.to_be_bytes()); // unsupported major
+        assert!(parse_mux_version_response(&buf).is_err());
+    }
+
+    #[test]
+    fn parse_version_response_rejects_bad_declared_length() {
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(&MUX_PROTO_VERSION.to_be_bytes());
+        // declared > buffer
+        buf[4..8].copy_from_slice(&999u32.to_be_bytes());
+        buf[8..12].copy_from_slice(&2u32.to_be_bytes());
+        assert!(parse_mux_version_response(&buf).is_err());
+    }
+
+    #[test]
+    fn setup_packet_v2_has_magic_and_payload_byte() {
+        let s = build_mux_setup_packet_v2();
+        assert_eq!(s.len(), 17);
+        // protocol = MUX_PROTO_SETUP (2)
+        assert_eq!(u32::from_be_bytes(s[0..4].try_into().unwrap()), MUX_PROTO_SETUP);
+        // length = 17
+        assert_eq!(u32::from_be_bytes(s[4..8].try_into().unwrap()), 17);
+        // mux magic
+        assert_eq!(u32::from_be_bytes(s[8..12].try_into().unwrap()), MUX_MAGIC);
+        // tx seq = 0, rx seq = 0xFFFF (so first device frame can have tx seq 1)
+        assert_eq!(u16::from_be_bytes([s[12], s[13]]), 0);
+        assert_eq!(u16::from_be_bytes([s[14], s[15]]), 0xFFFF);
+        // payload byte = 0x07 (SETUP "v2 capable" indicator)
+        assert_eq!(s[16], 0x07);
+    }
+
+    #[test]
+    fn proto_constants_match_usbmuxd_values() {
+        assert_eq!(MUX_PROTO_VERSION, 0);
+        assert_eq!(MUX_PROTO_CONTROL, 1);
+        assert_eq!(MUX_PROTO_SETUP, 2);
+        assert_eq!(MUX_PROTO_TCP, 6);
+        assert_eq!(MUX_MAGIC, 0xfeedface);
+        assert_eq!(MUX_TCP_WINDOW, 131_072);
+    }
+}

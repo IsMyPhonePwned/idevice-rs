@@ -232,6 +232,32 @@ enum Commands {
         /// Output path or filename prefix. If omitted, writes `screenshot-<UTC-timestamp>.<ext>` in the current directory. If the path has no extension we append `.png`/`.tiff` based on the bytes returned.
         path: Option<PathBuf>,
     },
+    /// Pair, **`StartSession` → TLS**, then sniff network packets via **`com.apple.pcapd`** (RVI),
+    /// like `pymobiledevice3 pcap`. Writes a libpcap file readable by Wireshark / `tcpdump`.
+    Pcap {
+        /// Output `.pcap` file. Use `-` for stdout (handy when piping into `tcpdump -r -`).
+        #[arg(short = 'o', long, value_name = "FILE")]
+        output: PathBuf,
+        /// Stop after this many packets. `0` (default) = run until the device closes the stream
+        /// or you hit Ctrl-C.
+        #[arg(long, default_value_t = 0)]
+        max_packets: u64,
+        /// Stop after writing this many bytes to the pcap file. `0` (default) = no cap.
+        #[arg(long, default_value_t = 0)]
+        max_bytes: u64,
+        /// Drop packets that don't match this process — accepts a numeric `pid` *or* a `comm` /
+        /// `ecomm` string (`"trustd"`, `"mobilesafari"`, …). Same semantics as
+        /// `pymobiledevice3 pcap --process`.
+        #[arg(long, value_name = "PID_OR_NAME")]
+        filter_process: Option<String>,
+        /// Drop packets that don't match this interface name (`en0`, `pdp_ip0`, …).
+        #[arg(long, value_name = "IFACE")]
+        filter_interface: Option<String>,
+        /// Print one line per accepted packet (`#N <iface> <dir> pid=… comm=…`). On by default;
+        /// turn off when piping to `-`.
+        #[arg(long, default_value_t = false)]
+        quiet: bool,
+    },
     /// Pair, **`StartSession` → TLS**, then **`com.apple.crashreportmover`** + **`com.apple.crashreportcopymobile`** (AFC), like **`idevicecrashreport`**.
     CrashReports {
         /// Output directory on the host (ignored with **`--remove-all`**; that mode uses `.` on host).
@@ -267,6 +293,22 @@ fn run() -> Result<(), String> {
         Commands::Diagnostics => cmd_diagnostics(&cli.device),
         Commands::Syslog { output } => cmd_syslog(&cli.device, output.as_deref()),
         Commands::Screenshot { path } => cmd_screenshot(&cli.device, path.as_deref()),
+        Commands::Pcap {
+            output,
+            max_packets,
+            max_bytes,
+            filter_process,
+            filter_interface,
+            quiet,
+        } => cmd_pcap(
+            &cli.device,
+            &output,
+            max_packets,
+            max_bytes,
+            filter_process.as_deref(),
+            filter_interface.as_deref(),
+            quiet,
+        ),
         Commands::CrashReports {
             out_dir,
             no_keep,
@@ -806,6 +848,182 @@ fn resolve_screenshot_path(input: Option<&Path>, ext: &'static str) -> Result<Pa
     ))
 }
 
+/// `idevice pcap` — sniff iOS RVI traffic into a libpcap (`.pcap`) file. Mirrors
+/// `pymobiledevice3 pcap`. Output is opened up front and a 24-byte global header is written
+/// before the first packet so partial captures are always valid Wireshark files.
+///
+/// **`-o -` (stdout) mode**: every human-readable status line is routed to **stderr** instead so
+/// that `… pcap -o - --quiet | tcpdump -r -` stays a pure libpcap byte stream (otherwise tcpdump
+/// chokes on the leading banner and reports `unknown file format`). Broken-pipe writes are caught
+/// explicitly so the CLI exits 0 / 130 instead of panicking with `failed printing to stdout`.
+#[allow(clippy::too_many_arguments)]
+fn cmd_pcap(
+    device: &DeviceArgs,
+    output: &Path,
+    max_packets: u64,
+    max_bytes: u64,
+    filter_process: Option<&str>,
+    filter_interface: Option<&str>,
+    quiet: bool,
+) -> Result<(), String> {
+    let use_stdout = output.as_os_str() == "-";
+
+    // When the libpcap stream is on stdout, route every banner / status / per-packet line to
+    // stderr — anything on stdout MUST be `\xa1\xb2\xc3\xd4 …` libpcap bytes. `say!` mirrors the
+    // existing `println!` calls in other subcommands but flips to `eprintln!` in stdout mode.
+    macro_rules! say {
+        ($($arg:tt)*) => {
+            if use_stdout { eprintln!($($arg)*); } else { println!($($arg)*); }
+        };
+    }
+
+    // When `-o -` is selected, swap process **fd 1 (stdout) → fd 2 (stderr)** so that *every*
+    // `println!` from this subcommand and its helpers (`lockdown_pair_validate_reopen`,
+    // `establish_lockdown_tls_session`, …) flushes to stderr instead of corrupting the libpcap
+    // byte stream that `tcpdump -r -` / `wireshark -i -` is reading. We keep the original stdout
+    // FD around as `pcap_stdout`, and use **that** for the libpcap writes only.
+    #[cfg(unix)]
+    let pcap_stdout: Option<std::fs::File> = if use_stdout {
+        use std::os::fd::FromRawFd;
+        let saved = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if saved < 0 {
+            return Err(format!(
+                "pcap: dup(stdout) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+            return Err(format!(
+                "pcap: dup2(stderr → stdout) failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: `saved` is now the only handle on the original stdout FD.
+        Some(unsafe { std::fs::File::from_raw_fd(saved) })
+    } else {
+        None
+    };
+    #[cfg(not(unix))]
+    let pcap_stdout: Option<std::fs::File> = None;
+
+    let (bus, addr, serial) = resolve_device_args(device)?;
+    let (usb_serial, mut client) = open_lockdown_for_cli(connect_args(device))?;
+    if let Ok(mut usb) = open_apple(bus, addr, serial) {
+        say!(
+            "=== Phone (identified on USB) ===\n{}",
+            format_apple_device_identity(&mut usb)?
+        );
+    } else {
+        say!(
+            "=== Phone (via usbmuxd) ===\nIdentifier (pair-record name): {}",
+            usb_serial
+        );
+    }
+    let (keys, ids, from_saved_record) = load_or_generate_keys_and_ids(device, &usb_serial)?;
+    if !lockdown_pair_validate_reopen(
+        &mut client,
+        &keys,
+        &ids,
+        device,
+        from_saved_record,
+        "pcap",
+        &usb_serial,
+    )? {
+        return Ok(());
+    }
+    say!("\n=== Network capture (`com.apple.pcapd`, like pymobiledevice3 pcap) ===");
+
+    let limits = idevice::pcapd::PcapRelayLimits {
+        max_packets: if max_packets == 0 { None } else { Some(max_packets) },
+        max_bytes_in_pcap: if max_bytes == 0 { None } else { Some(max_bytes) },
+        filter_process: filter_process.map(|s| s.to_string()),
+        filter_interface: filter_interface.map(|s| s.to_string()),
+    };
+
+    let output_label: String = if use_stdout {
+        "<stdout>".to_string()
+    } else {
+        output.display().to_string()
+    };
+    say!(
+        "[pcap] Output: {}\n[pcap] Filters: process={:?} interface={:?}\n\
+         [pcap] Limits:  max_packets={} max_bytes={}\n\
+         [pcap] Open the file in Wireshark / `tcpdump -r {}` (LINKTYPE_ETHERNET, snaplen {}). Ctrl+C to stop.\n",
+        output_label,
+        filter_process,
+        filter_interface,
+        if max_packets == 0 { "∞".to_string() } else { max_packets.to_string() },
+        if max_bytes == 0 { "∞".to_string() } else { max_bytes.to_string() },
+        output_label,
+        idevice_usb_core::pcapd_proto::PCAP_DEFAULT_SNAPLEN,
+    );
+
+    establish_lockdown_tls_session(&mut client, &keys, &ids, device, "[pcap]")?;
+
+    let mut sink: Box<dyn std::io::Write> = if use_stdout {
+        // `pcap_stdout` is `Some(File)` on Unix (the original stdout FD we saved before redirecting
+        // fd 1 to stderr). On non-Unix targets we fall back to the regular stdout lock — there's no
+        // pipe redirection to worry about there, and `print!` panics on Windows are extremely rare.
+        match pcap_stdout {
+            Some(f) => Box::new(std::io::BufWriter::new(f)),
+            None => Box::new(std::io::stdout().lock()),
+        }
+    } else {
+        Box::new(
+            File::create(output).map_err(|e| format!("create {}: {}", output.display(), e))?,
+        )
+    };
+
+    let result = idevice::pcapd::relay_pcap(
+        &mut client,
+        &keys,
+        device.lockdown_tls_client_auth,
+        device.lockdown_tls_sni,
+        device.lockdown_tls_debug,
+        &mut sink,
+        limits,
+        |evt| {
+            if !quiet {
+                // Per-packet stats also go to stderr in stdout mode, so they don't corrupt the
+                // libpcap stream consumed by tcpdump / wireshark.
+                say!(
+                    "[pcap] #{:>5}  {:>6}/{:<14}  {:>3}  pf={:<10} pid={:<6} comm={:<17} bytes={}",
+                    evt.packet_index,
+                    evt.direction,
+                    evt.interface,
+                    evt.interface_type,
+                    evt.protocol_family,
+                    evt.pid,
+                    evt.comm,
+                    evt.byte_len,
+                );
+            }
+            true
+        },
+    );
+    // Drop the sink first so the file/stdout pipe is closed before we print stop info — Wireshark
+    // / tcpdump can then read whatever we wrote even if the relay was interrupted mid-frame.
+    drop(sink);
+
+    let stop = match result {
+        Ok(stop) => stop,
+        Err(e) => {
+            // Treat a downstream broken pipe (`tcpdump | head`, `tcpdump` quit, `wireshark` stopped
+            // its FIFO read…) as a clean shutdown rather than a CLI error: the operator already
+            // got the bytes they asked for. We string-match because the relay returns `String`,
+            // not `io::Error`, and we don't want to plumb a typed error through every layer.
+            let lc = e.to_lowercase();
+            if lc.contains("broken pipe") || lc.contains("os error 32") || lc.contains("os error 22") {
+                say!("[pcap] Stopped: downstream pipe closed ({})", e);
+                return Ok(());
+            }
+            return Err(e);
+        }
+    };
+    say!("[pcap] Stopped: {:?} (output: {})", stop, output_label);
+    Ok(())
+}
+
 fn cmd_crash_reports(
     device: &DeviceArgs,
     out_dir: &Path,
@@ -854,4 +1072,50 @@ fn cmd_crash_reports(
         device.lockdown_tls_debug,
         device.lockdown_tls_settle_ms,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_ids_legacy_matches_wasm_constants() {
+        let ids = pairing_ids(PairIdsMode::Legacy);
+        let legacy = PairingIds::legacy_host_and_system();
+        assert_eq!(ids.host_id, legacy.host_id);
+        assert_eq!(ids.system_buid, legacy.system_buid);
+    }
+
+    #[test]
+    fn pairing_ids_random_produces_distinct_uuids() {
+        let a = pairing_ids(PairIdsMode::Random);
+        let b = pairing_ids(PairIdsMode::Random);
+        assert_eq!(a.host_id.len(), 36, "RFC4122 string");
+        assert_eq!(a.system_buid.len(), 36);
+        assert_ne!(a.host_id, b.host_id, "fresh UUID per call");
+        assert_ne!(a.system_buid, b.system_buid);
+        assert_ne!(a.host_id, a.system_buid);
+    }
+
+    #[test]
+    fn resolve_screenshot_path_keeps_user_extension() {
+        let p = Path::new("/tmp/manual.png");
+        let out = resolve_screenshot_path(Some(p), "tiff").unwrap();
+        assert_eq!(out, PathBuf::from("/tmp/manual.png"));
+    }
+
+    #[test]
+    fn resolve_screenshot_path_appends_extension_to_basename() {
+        let p = Path::new("/tmp/no-ext-please");
+        let out = resolve_screenshot_path(Some(p), "png").unwrap();
+        assert_eq!(out, PathBuf::from("/tmp/no-ext-please.png"));
+    }
+
+    #[test]
+    fn resolve_screenshot_path_default_picks_timestamped_basename() {
+        let out = resolve_screenshot_path(None, "png").unwrap();
+        let n = out.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(n.starts_with("screenshot-"), "unexpected default name: {n}");
+        assert!(n.ends_with(".png"));
+    }
 }

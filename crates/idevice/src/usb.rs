@@ -322,3 +322,37 @@ pub fn usb_serial_for_pair_record(usb: &mut AppleUsb) -> Result<String, String> 
     }
     Ok(ser)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_strips_trailing_nul_byte() {
+        // rusb has been observed returning the USB serial with a trailing NUL byte on iOS 17.
+        assert_eq!(
+            sanitize_usb_descriptor_string("00008150000A62342613401C\0"),
+            "00008150000A62342613401C"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_interior_control_chars_and_trims() {
+        let raw = "  iPhone\x01\x02\t Apple\0  ";
+        assert_eq!(sanitize_usb_descriptor_string(raw), "iPhone Apple");
+    }
+
+    #[test]
+    fn sanitize_returns_empty_for_only_controls() {
+        assert_eq!(sanitize_usb_descriptor_string("\0\0\0"), "");
+        assert_eq!(sanitize_usb_descriptor_string(""), "");
+    }
+
+    #[test]
+    fn sanitize_keeps_unicode_letters_and_digits() {
+        assert_eq!(
+            sanitize_usb_descriptor_string("Café 123"),
+            "Café 123"
+        );
+    }
+}

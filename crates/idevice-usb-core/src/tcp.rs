@@ -25,6 +25,14 @@ pub struct TcpConn {
     pub ack: u32,
     pub mux_version: u8,
     pub mux_rx_seq: u16,
+    /// **Ciphertext stash for the rustls feeder**. iOS lockdownd can deliver a single mux segment
+    /// that contains multiple back-to-back TLS records (~16 KiB each) — `pcapd` does this when
+    /// the device is busy. rustls's internal plaintext buffer caps at `MAX_PLAINTEXT_SIZE`
+    /// (16 KiB), so feeding the whole segment via `read_tls` in one go and *then* trying to drain
+    /// fails with `received plaintext buffer full`. The TLS feeder pushes any unfed bytes here
+    /// after each `read_tls` round-trip and consumes them on the next call, which keeps
+    /// **feed → process → drain → repeat** cycle balanced.
+    pub pending_tls_in: Vec<u8>,
 }
 
 impl TcpConn {
@@ -54,6 +62,7 @@ impl TcpConn {
             ack: 0,
             mux_version,
             mux_rx_seq: 0xFFFF,
+            pending_tls_in: Vec::new(),
         }
     }
 
@@ -163,5 +172,129 @@ impl TcpConn {
         buf.extend_from_slice(&0u16.to_be_bytes());
         buf.extend_from_slice(payload);
         buf
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mux_header_len_v1_vs_v2() {
+        let mut c = TcpConn::new_ready_for_syn(1, 62078);
+        assert_eq!(c.mux_header_len(), 8);
+        c.mux_version = 2;
+        assert_eq!(c.mux_header_len(), 16);
+    }
+
+    #[test]
+    fn new_ready_for_syn_initialises_state() {
+        let c = TcpConn::new_ready_for_syn(2, 62078);
+        assert_eq!(c.dport, 62078);
+        assert_eq!(c.seq, 0);
+        assert_eq!(c.ack, 0);
+        assert_eq!(c.mux_version, 2);
+        // After SETUP the device expects rx_seq == 0xFFFF + 1 → 0; we seed 0xFFFF so the first
+        // outgoing TX appears as `rx_seq=0xFFFF`, which matches usbmuxd's `device_version_input`.
+        assert_eq!(c.mux_rx_seq, 0xFFFF);
+        // Source port stays inside the upper-half range usbmuxd uses (0xC000–0xFFFF).
+        assert!(c.sport >= 0xc000 || c.sport == 27015);
+    }
+
+    #[test]
+    fn build_mux_tcp_packet_v2_layout_and_advances_tx_seq() {
+        let mut c = TcpConn::new_ready_for_syn(2, 62078);
+        c.sport = 0xC123;
+        c.seq = 0;
+        c.ack = 0;
+        let mut tx = 1u16;
+        let pkt = c.build_mux_tcp_packet(&mut tx, 0x02 /* SYN */, &[]);
+        assert_eq!(tx, 2, "tx seq must advance by 1");
+        assert_eq!(pkt.len(), 16 + 20);
+
+        // Mux header (16 bytes for v2)
+        assert_eq!(u32::from_be_bytes(pkt[0..4].try_into().unwrap()), MUX_PROTO_TCP);
+        assert_eq!(u32::from_be_bytes(pkt[4..8].try_into().unwrap()), 36);
+        assert_eq!(u32::from_be_bytes(pkt[8..12].try_into().unwrap()), MUX_MAGIC);
+        assert_eq!(u16::from_be_bytes([pkt[12], pkt[13]]), 1, "mux tx seq we just advanced");
+        assert_eq!(u16::from_be_bytes([pkt[14], pkt[15]]), 0xFFFF, "mux rx seq from new_ready_for_syn");
+
+        // TCP header (RFC 793 layout, big-endian)
+        let tcp = &pkt[16..];
+        assert_eq!(u16::from_be_bytes([tcp[0], tcp[1]]), 0xC123); // src
+        assert_eq!(u16::from_be_bytes([tcp[2], tcp[3]]), 62078); // dst
+        assert_eq!(u32::from_be_bytes([tcp[4], tcp[5], tcp[6], tcp[7]]), 0); // seq
+        assert_eq!(u32::from_be_bytes([tcp[8], tcp[9], tcp[10], tcp[11]]), 0); // ack
+        // data offset (high nibble) * 4 = 20 bytes
+        assert_eq!(tcp[12] >> 4, 5);
+        // flags
+        assert_eq!(tcp[13], 0x02);
+        // window scaled like usbmuxd (`MUX_TCP_WINDOW >> 8`)
+        assert_eq!(
+            u16::from_be_bytes([tcp[14], tcp[15]]),
+            (MUX_TCP_WINDOW >> 8) as u16
+        );
+    }
+
+    #[test]
+    fn build_mux_tcp_packet_v1_omits_mux_magic_block() {
+        let mut c = TcpConn::new_ready_for_syn(1, 62078);
+        let mut tx = 0u16;
+        let pkt = c.build_mux_tcp_packet(&mut tx, 0x10, b"abc");
+        // v1 mux header is 8 bytes, no magic / tx / rx fields.
+        assert_eq!(pkt.len(), 8 + 20 + 3);
+        assert_eq!(u32::from_be_bytes(pkt[0..4].try_into().unwrap()), MUX_PROTO_TCP);
+        assert_eq!(u32::from_be_bytes(pkt[4..8].try_into().unwrap()), 31);
+        // tx seq must NOT advance for v1.
+        assert_eq!(tx, 0);
+        // payload trailing
+        assert_eq!(&pkt[pkt.len() - 3..], b"abc");
+    }
+
+    fn fabricate_syn_ack_v2(mux_rx_seq: u16, peer_seq: u32, peer_ack: u32) -> Vec<u8> {
+        // 16 bytes mux header + 20 bytes TCP header (no payload).
+        let mut p = Vec::with_capacity(36);
+        p.extend_from_slice(&MUX_PROTO_TCP.to_be_bytes());
+        p.extend_from_slice(&36u32.to_be_bytes());
+        p.extend_from_slice(&MUX_MAGIC.to_be_bytes());
+        p.extend_from_slice(&0u16.to_be_bytes());
+        p.extend_from_slice(&mux_rx_seq.to_be_bytes());
+
+        // src/dst — finish_handshake_ack_packet doesn't validate them but the offsets matter.
+        p.extend_from_slice(&62078u16.to_be_bytes());
+        p.extend_from_slice(&0xC123u16.to_be_bytes());
+        p.extend_from_slice(&peer_seq.to_be_bytes());
+        p.extend_from_slice(&peer_ack.to_be_bytes());
+        p.push(0x50);
+        p.push(0x12); // SYN-ACK
+        p.extend_from_slice(&0u16.to_be_bytes());
+        p.extend_from_slice(&0u16.to_be_bytes());
+        p.extend_from_slice(&0u16.to_be_bytes());
+        p
+    }
+
+    #[test]
+    fn finish_handshake_ack_packet_advances_seq_ack_and_rx_seq() {
+        let mut c = TcpConn::new_ready_for_syn(2, 62078);
+        let raw = fabricate_syn_ack_v2(0x0001, 0xDEAD_BEEF, 0x0000_0001);
+        let mut tx = 2u16;
+        let ack_pkt = c.finish_handshake_ack_packet(&raw, &mut tx).unwrap();
+        // After SYN-ACK we capture the device's mux_rx_seq.
+        assert_eq!(c.mux_rx_seq, 0x0001);
+        // seq ← peer ack, ack ← peer seq + 1 (SYN consumes one logical byte).
+        assert_eq!(c.seq, 0x0000_0001);
+        assert_eq!(c.ack, 0xDEAD_BEEF + 1);
+        // build_mux_tcp_packet was called with flags=0x10 (ACK) so output is well-formed.
+        assert_eq!(ack_pkt.len(), 16 + 20);
+        assert_eq!(ack_pkt[16 + 13], 0x10);
+        // tx must have been bumped exactly once (the ACK frame).
+        assert_eq!(tx, 3);
+    }
+
+    #[test]
+    fn finish_handshake_ack_packet_rejects_truncated_input() {
+        let mut c = TcpConn::new_ready_for_syn(2, 62078);
+        let mut tx = 0u16;
+        assert!(c.finish_handshake_ack_packet(&[0u8; 4], &mut tx).is_err());
     }
 }

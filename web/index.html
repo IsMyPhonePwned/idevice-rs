@@ -613,6 +613,66 @@
       </details>
 
       <details class="toggle-block">
+        <summary>Network capture (com.apple.pcapd → Wireshark .pcap)</summary>
+        <p class="hint">
+          Streams the iOS Remote Virtual Interface (RVI) packets over a secondary mux TCP + TLS,
+          parses each `device_packet_struct`, and saves a classic libpcap file you can drop into
+          Wireshark / <code>tcpdump -r</code>. Cellular (<code>pdp_ip*</code>) packets get a
+          synthetic Ethernet header so they decode as IPv4/IPv6.
+        </p>
+        <div class="row two-col">
+          <div>
+            <label for="pcap-filter-process">Process filter (PID, comm, or ecomm — empty = all)</label>
+            <input type="search" id="pcap-filter-process" placeholder="e.g. mobilesafari or 73" />
+          </div>
+          <div>
+            <label for="pcap-filter-iface">Interface filter (e.g. en0, pdp_ip0 — empty = all)</label>
+            <input type="search" id="pcap-filter-iface" placeholder="e.g. en0" />
+          </div>
+        </div>
+        <div class="row two-col">
+          <div>
+            <label for="pcap-max-packets">Max packets (0 = unlimited)</label>
+            <input type="text" id="pcap-max-packets" value="500" inputmode="numeric" />
+          </div>
+          <div>
+            <label for="pcap-max-duration">Max duration (s, 0 = unlimited)</label>
+            <input type="text" id="pcap-max-duration" value="60" inputmode="numeric" />
+          </div>
+        </div>
+        <div class="row two-col">
+          <div>
+            <label for="pcap-max-bytes">Max bytes (0 = unlimited)</label>
+            <input type="text" id="pcap-max-bytes" value="4194304" inputmode="numeric" />
+          </div>
+          <div>
+            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="pcap-mirror" /> Mirror packet log to Output</label>
+          </div>
+        </div>
+        <p class="hint">
+          The whole `.pcap` file (libpcap, <code>LINKTYPE_ETHERNET</code>, snaplen 65535) is held in
+          memory — keep <em>Max bytes</em> reasonable (4&nbsp;MiB default). Like syslog, reads block
+          on WebUSB until the device sends data; lock/unlock or open an app to flush.
+        </p>
+        <div class="btn-row">
+          <button type="button" class="btn" id="btn-pcap" data-needs="dev,auth"
+            title="StartService(com.apple.pcapd) → secondary TLS → libpcap stream">
+            <span class="spinner" aria-hidden="true"></span><span>Capture network</span>
+          </button>
+          <button type="button" class="btn btn-ghost" id="btn-pcap-stop" disabled>Stop</button>
+          <button type="button" class="btn btn-ghost" id="btn-pcap-save" disabled title="Download the libpcap (.pcap) file we built so far">Save .pcap</button>
+          <button type="button" class="btn btn-ghost" id="btn-pcap-clear" disabled>Clear</button>
+        </div>
+        <div id="pcap-area" hidden style="margin-top:0.4rem;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live packets</h2>
+            <span class="hint" id="pcap-status" style="margin:0;"></span>
+          </div>
+          <pre id="pcap-out"></pre>
+        </div>
+      </details>
+
+      <details class="toggle-block">
         <summary>Crash reports (crashreportmover + AFC)</summary>
         <div class="row two-col">
           <div>
@@ -669,6 +729,7 @@
       lockdownCrashReports,
       lockdownSyslog,
       lockdownScreenshot,
+      lockdownPcap,
     } from "./pkg/idevice_wasm.js";
 
     /* -----------------------------
@@ -1539,6 +1600,147 @@
         syslogState.running = false;
         $("btn-syslog-stop").disabled = true;
         $("btn-syslog-clear").disabled = false;
+      }
+    });
+
+    /* ---------- pcap (com.apple.pcapd) -------------------------------- */
+    let pcapState = {
+      running: false,
+      stopRequested: false,
+      packets: 0,
+      blob: null,
+      startedAt: 0,
+      pendingHtml: "",
+      lastFlushAt: 0,
+      mirrorToLog: false,
+    };
+    function pcapReset() {
+      $("pcap-out").textContent = "";
+      $("pcap-status").textContent = "";
+      $("pcap-area").hidden = true;
+      $("btn-pcap-save").disabled = true;
+      $("btn-pcap-clear").disabled = true;
+      pcapState.packets = 0;
+      pcapState.blob = null;
+      pcapState.pendingHtml = "";
+    }
+    function pcapFlushPending() {
+      if (!pcapState.pendingHtml) return;
+      const out = $("pcap-out");
+      out.insertAdjacentHTML("beforeend", pcapState.pendingHtml);
+      pcapState.pendingHtml = "";
+      // Trim runaway DOM: keep at most ~2000 trailing lines so the page stays responsive.
+      const MAX_LINES = 2000;
+      const txt = out.textContent;
+      const newlineCount = (txt.match(/\n/g) || []).length;
+      if (newlineCount > MAX_LINES) {
+        const lines = txt.split(/\n/);
+        out.textContent = lines.slice(lines.length - MAX_LINES).join("\n");
+      }
+      out.scrollTop = out.scrollHeight;
+    }
+    function pcapStatusText(extra) {
+      const dur = (((Date.now() - pcapState.startedAt) / 1000) || 0).toFixed(1);
+      const blobBytes = pcapState.blob ? pcapState.blob.length : 0;
+      return `${pcapState.packets} pkts · ${fmtBytes(blobBytes)} · ${dur}s${extra ? " · " + extra : ""}`;
+    }
+    function escHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      }[c]));
+    }
+    $("btn-pcap-stop").addEventListener("click", () => {
+      if (pcapState.running) {
+        pcapState.stopRequested = true;
+        $("btn-pcap-stop").disabled = true;
+      }
+    });
+    $("btn-pcap-clear").addEventListener("click", () => {
+      if (pcapState.running) return;
+      pcapReset();
+    });
+    $("btn-pcap-save").addEventListener("click", () => {
+      if (!pcapState.blob || !pcapState.blob.length) return;
+      const blob = new Blob([pcapState.blob], { type: "application/vnd.tcpdump.pcap" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      a.download = `idevice-${stamp}.pcap`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      logLine("info", `idevice-${stamp}.pcap downloaded (${fmtBytes(pcapState.blob.length)})`);
+    });
+    $("btn-pcap").addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      if (busyBtn || pcapState.running) return;
+      const procFilter = $("pcap-filter-process").value.trim();
+      const ifaceFilter = $("pcap-filter-iface").value.trim();
+      const maxPkts = Math.max(0, parseInt($("pcap-max-packets").value || "0", 10) || 0);
+      const maxDur = Math.max(0, parseInt($("pcap-max-duration").value || "0", 10) || 0);
+      const maxBytes = Math.max(0, parseInt($("pcap-max-bytes").value || "0", 10) || 0);
+      const mirror = $("pcap-mirror").checked;
+
+      pcapReset();
+      pcapState.running = true;
+      pcapState.stopRequested = false;
+      pcapState.startedAt = Date.now();
+      pcapState.mirrorToLog = mirror;
+      $("pcap-area").hidden = false;
+      $("btn-pcap-stop").disabled = false;
+      $("btn-pcap-clear").disabled = true;
+      $("btn-pcap-save").disabled = true;
+      setBusy(btn, "Pcap…");
+      logLine("step",
+        `▶ Capture network${procFilter ? ` (proc="${procFilter}")` : ""}${ifaceFilter ? ` (iface="${ifaceFilter}")` : ""}`
+        + `${maxPkts ? ` · ${maxPkts} pkts` : ""}${maxDur ? ` · ${maxDur}s` : ""}${maxBytes ? ` · ${fmtBytes(maxBytes)}` : ""}`
+      );
+
+      const onPacket = (evt) => {
+        pcapState.packets = evt.index;
+        const line = `#${String(evt.index).padStart(5, " ")}  ${(evt.direction || "?").padStart(3, " ")}  `
+          + `${(evt.interface || "?").padEnd(10, " ")} (${evt.interfaceType || "?"})  `
+          + `${(evt.protocolFamily || "?").padEnd(10, " ")}  pid=${evt.pid}  comm=${evt.comm || ""}  bytes=${evt.bytes}\n`;
+        pcapState.pendingHtml += escHtml(line);
+        const now = performance.now();
+        if (now - pcapState.lastFlushAt > 100) {
+          pcapState.lastFlushAt = now;
+          pcapFlushPending();
+        }
+        if (pcapState.mirrorToLog) {
+          logLine("info", line.replace(/\n$/, ""));
+        }
+        $("pcap-status").textContent = pcapStatusText();
+        return !pcapState.stopRequested;
+      };
+
+      try {
+        const res = await lockdownPcap(
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni(),
+          onPacket,
+          procFilter, ifaceFilter,
+          maxPkts, maxBytes, maxDur * 1000
+        );
+        pcapFlushPending();
+        if (res && res.data instanceof Uint8Array) {
+          pcapState.blob = res.data;
+          $("btn-pcap-save").disabled = false;
+        }
+        const reason = (res && res.stoppedReason) || "?";
+        const sslLabel = res && res.ssl ? "TLS" : "cleartext";
+        $("pcap-status").textContent = pcapStatusText(`stopped (${reason}, ${sslLabel})`);
+        logLine("ok", `✓ Pcap stopped — ${reason} · ${pcapState.packets} pkts · ${fmtBytes(res ? res.bytes : 0)} · ${sslLabel}`);
+        clearBusy(btn, true, `Pcap ✓ (${reason})`);
+      } catch (e) {
+        pcapFlushPending();
+        $("pcap-status").textContent = pcapStatusText(`error: ${e}`);
+        logLine("err", `✗ Pcap: ${e}`);
+        clearBusy(btn, false, "Pcap ✗");
+      } finally {
+        pcapState.running = false;
+        $("btn-pcap-stop").disabled = true;
+        $("btn-pcap-clear").disabled = false;
       }
     });
 

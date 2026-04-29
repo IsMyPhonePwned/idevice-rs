@@ -327,3 +327,97 @@ fn parse_info_dictionary(data: &[u8]) -> std::collections::HashMap<String, Strin
     }
     m
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_afc_packet_layout_matches_libimobiledevice() {
+        let body = b"hi";
+        let pkt = build_afc_packet(0xdead_beef, AFC_OP_FILE_READ, body);
+
+        assert_eq!(pkt.len(), AFC_HDR + body.len());
+        assert_eq!(&pkt[0..8], AFC_MAGIC);
+        let entire = u64::from_le_bytes(pkt[8..16].try_into().unwrap());
+        let this = u64::from_le_bytes(pkt[16..24].try_into().unwrap());
+        let pn = u64::from_le_bytes(pkt[24..32].try_into().unwrap());
+        let op = u64::from_le_bytes(pkt[32..40].try_into().unwrap());
+        assert_eq!(entire, (AFC_HDR + body.len()) as u64);
+        assert_eq!(this, entire);
+        assert_eq!(pn, 0xdead_beef);
+        assert_eq!(op, AFC_OP_FILE_READ);
+        assert_eq!(&pkt[AFC_HDR..], body);
+    }
+
+    #[test]
+    fn parse_afc_header_round_trips_build() {
+        let pkt = build_afc_packet(7, AFC_OP_DATA, b"abcdef");
+        let (entire, this, pn, op) = parse_afc_header(&pkt[..AFC_HDR]).unwrap();
+        assert_eq!(entire, (AFC_HDR + 6) as u64);
+        assert_eq!(this, entire);
+        assert_eq!(pn, 7);
+        assert_eq!(op, AFC_OP_DATA);
+    }
+
+    #[test]
+    fn parse_afc_header_rejects_short_input() {
+        let err = parse_afc_header(&[0u8; 8]).unwrap_err();
+        assert!(err.contains("short"));
+    }
+
+    #[test]
+    fn parse_afc_header_rejects_bad_magic() {
+        let mut h = [0u8; AFC_HDR];
+        h[..8].copy_from_slice(b"NOTAFCMG");
+        let err = parse_afc_header(&h).unwrap_err();
+        assert!(err.contains("magic"));
+    }
+
+    #[test]
+    fn parse_string_list_filters_dot_entries_and_empties() {
+        // libimobiledevice returns `.\0..\0Photos\0Trash\0`
+        let raw = b".\0..\0Photos\0Trash\0";
+        let v = parse_string_list(raw);
+        assert_eq!(v, vec!["Photos".to_string(), "Trash".to_string()]);
+    }
+
+    #[test]
+    fn parse_string_list_handles_unterminated_tail() {
+        // Last name "Last" missing its trailing NUL — should still be picked up.
+        let raw = b"a\0b\0Last";
+        let v = parse_string_list(raw);
+        assert_eq!(v, vec!["a".to_string(), "b".to_string(), "Last".to_string()]);
+    }
+
+    #[test]
+    fn parse_string_list_returns_empty_for_empty_input() {
+        assert!(parse_string_list(b"").is_empty());
+    }
+
+    #[test]
+    fn parse_info_dictionary_recovers_all_pairs() {
+        // Mimics `afc_get_file_info` reply: pairs of NUL-terminated strings.
+        let raw = b"st_size\0123\0st_blocks\08\0st_ifmt\0S_IFREG";
+        let m = parse_info_dictionary(raw);
+        assert_eq!(m.get("st_size").map(String::as_str), Some("123"));
+        assert_eq!(m.get("st_blocks").map(String::as_str), Some("8"));
+        assert_eq!(m.get("st_ifmt").map(String::as_str), Some("S_IFREG"));
+    }
+
+    #[test]
+    fn parse_info_dictionary_handles_trailing_nul_value() {
+        let raw = b"key1\0val1\0key2\0val2\0";
+        let m = parse_info_dictionary(raw);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.get("key1").map(String::as_str), Some("val1"));
+        assert_eq!(m.get("key2").map(String::as_str), Some("val2"));
+    }
+
+    #[test]
+    fn parse_info_dictionary_returns_empty_on_empty_or_no_separator() {
+        assert!(parse_info_dictionary(b"").is_empty());
+        // No NUL in input — parser cannot extract a key.
+        assert!(parse_info_dictionary(b"only-key").is_empty());
+    }
+}

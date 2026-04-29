@@ -99,3 +99,26 @@ pub fn open_lockdown_for_cli(
 pub fn open_lockdown(args: LockdownConnectArgs<'_>) -> Result<LockdownClient, String> {
     open_lockdown_for_cli(args).map(|(_, c)| c)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usb_open_busy_recognises_libusb_busy_messages() {
+        // Each substring is what rusb / libusb produce when usbmuxd / ipheth / mobile-broadband
+        // already holds the iPhone — we must trigger the usbmuxd fallback in that case.
+        assert!(usb_open_busy("set_active_configuration: Resource busy"));
+        assert!(usb_open_busy("Resource busy"));
+        assert!(usb_open_busy("claim_interface: device busy"));
+        assert!(usb_open_busy("Could not claim USB interface"));
+        assert!(usb_open_busy("LIBUSB_ERROR_BUSY"));
+    }
+
+    #[test]
+    fn usb_open_busy_ignores_unrelated_errors() {
+        assert!(!usb_open_busy("No such device"));
+        assert!(!usb_open_busy("permission denied"));
+        assert!(!usb_open_busy(""));
+    }
+}

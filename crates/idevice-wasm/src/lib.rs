@@ -12,6 +12,7 @@ mod lockdown_tls_wasm;
 mod lockdown_wasm;
 mod mux_probe;
 mod pair_record_plist;
+mod pcapd_wasm;
 mod screenshotr_wasm;
 mod syslog_wasm;
 mod wasm_crypto;

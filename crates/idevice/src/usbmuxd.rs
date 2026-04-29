@@ -238,3 +238,85 @@ pub fn device_id_for_udid(socket_path: &Path, udid: &str) -> Result<u32, String>
         udid_norm
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_udid_inserts_dash_after_8_hex_when_missing() {
+        // 24 hex chars without a hyphen → libusbmuxd `SerialNumber` shape →
+        // canonical UDID `<8>-<16>` like Apple's idevicepair output.
+        assert_eq!(
+            normalize_udid_str("00008150000A62342613401C"),
+            "00008150-000A62342613401C"
+        );
+    }
+
+    #[test]
+    fn normalize_udid_keeps_already_dashed_strings() {
+        let input = "00008150-000A62342613401C";
+        assert_eq!(normalize_udid_str(input), input);
+    }
+
+    #[test]
+    fn normalize_udid_trims_surrounding_whitespace() {
+        assert_eq!(
+            normalize_udid_str("  00008150000A62342613401C  "),
+            "00008150-000A62342613401C"
+        );
+    }
+
+    #[test]
+    fn normalize_udid_does_not_reformat_short_strings() {
+        assert_eq!(normalize_udid_str("short"), "short");
+        assert_eq!(
+            normalize_udid_str("not-quite-twenty-four-chars"),
+            "not-quite-twenty-four-chars"
+        );
+    }
+
+    /// Both branches of `default_socket_path()` are exercised here in a single test so the
+    /// `USBMUXD_SOCKET_PATH` env mutation can't race against another in-process test.
+    #[test]
+    fn default_socket_path_honours_env_override_or_falls_back() {
+        let key = "USBMUXD_SOCKET_PATH";
+        let prev = std::env::var_os(key);
+        std::env::set_var(key, "/tmp/idevice-rs-test-usbmuxd.sock");
+        assert_eq!(
+            default_socket_path(),
+            PathBuf::from("/tmp/idevice-rs-test-usbmuxd.sock")
+        );
+        std::env::remove_var(key);
+        assert_eq!(default_socket_path(), PathBuf::from("/var/run/usbmuxd"));
+        if let Some(v) = prev {
+            std::env::set_var(key, v);
+        }
+    }
+
+    #[test]
+    fn next_tag_returns_monotonic_increasing_values() {
+        let a = next_tag();
+        let b = next_tag();
+        let c = next_tag();
+        assert!(b > a && c > b, "next_tag() must be strictly increasing");
+    }
+
+    #[test]
+    fn base_plist_dict_emits_well_known_libusbmux_fields() {
+        let d = base_plist_dict("ListDevices");
+        let mt = d
+            .get("MessageType")
+            .and_then(|v| v.as_string())
+            .unwrap_or("");
+        assert_eq!(mt, "ListDevices");
+        let v = d
+            .get("kLibUSBMuxVersion")
+            .and_then(|v| v.as_unsigned_integer())
+            .unwrap_or(0);
+        assert_eq!(v, PLIST_LIBUSBMUX_VERSION);
+        assert!(d.get("BundleID").is_some());
+        assert!(d.get("ClientVersionString").is_some());
+        assert!(d.get("ProgName").is_some());
+    }
+}

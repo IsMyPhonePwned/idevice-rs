@@ -298,14 +298,20 @@ pub async fn tls_read_plain_wasm(
 ) -> Result<usize, String> {
     let mut mux_seg: usize = 0;
     loop {
+        // 1. Drain decrypted plaintext FIRST. iOS lockdownd often delivers multiple back-to-back
+        //    TLS records (e.g. pcapd / syslog bursts) inside a single mux segment, and rustls
+        //    enforces a 16 KiB plaintext-buffer cap (`MAX_PLAINTEXT_SIZE`). Feeding the whole
+        //    segment before draining causes `read_tls` to error with `received plaintext buffer
+        //    full`. Reading first short-circuits this whenever there's anything ready.
         let mut r = tls.reader();
         match r.read(buf) {
-            Ok(n) => {
-                if trace_plain && n > 0 {
+            Ok(n) if n > 0 => {
+                if trace_plain {
                     wasm_log::debug_verbose(trace_plain, &format!("[wasm-tls] RX plain {} bytes", n));
                 }
                 return Ok(n);
             }
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => return Err(format!("rustls plaintext read: {}", e)),
         }
@@ -315,12 +321,78 @@ pub async fn tls_read_plain_wasm(
                 "rustls: plaintext read WouldBlock but connection does not want_read".into(),
             );
         }
-        let chunk = hub.recv_tcp_payload_for(tcp).await.map_err(tls_js_err)?;
+
+        // 2. Pull next ciphertext bytes — leftover stash takes precedence over a fresh USB read so
+        //    record order is preserved across calls.
+        let mut chunk: Vec<u8> = std::mem::take(&mut tcp.pending_tls_in);
         if chunk.is_empty() {
-            return Err("TLS: empty mux segment while reading".into());
+            chunk = hub.recv_tcp_payload_for(tcp).await.map_err(tls_js_err)?;
+            if chunk.is_empty() {
+                return Err("TLS: empty mux segment while reading".into());
+            }
         }
-        feed_tls_from_tcp_segment(tls, &chunk, "app-read", mux_seg)?;
+
+        // 3. Feed incrementally; whatever rustls couldn't accept goes back on the stash and the
+        //    next loop iteration will retry after the caller drains in step (1).
+        let consumed = feed_tls_from_tcp_segment_incremental(tls, &chunk, "app-read", mux_seg)?;
+        if consumed < chunk.len() {
+            tcp.pending_tls_in = chunk[consumed..].to_vec();
+        }
         mux_seg = mux_seg.saturating_add(1);
+    }
+}
+
+/// Feed `chunk` into rustls one record at a time, stopping early when its plaintext queue is
+/// near the documented 16 KiB cap so the caller can drain via `tls.reader().read(...)`. Returns
+/// the number of bytes actually consumed; the remainder belongs back on `TcpConn::pending_tls_in`.
+fn feed_tls_from_tcp_segment_incremental(
+    tls: &mut ClientConnection,
+    chunk: &[u8],
+    _phase: &str,
+    _seg_idx: usize,
+) -> Result<usize, String> {
+    let mut cur = Cursor::new(chunk);
+    while (cur.position() as usize) < chunk.len() {
+        let pos_before = cur.position();
+        let n = match tls.read_tls(&mut cur) {
+            Ok(n) => n,
+            Err(e) if is_plaintext_buffer_full(&e) => {
+                // rustls is asking us to drain plaintext before it accepts more ciphertext.
+                return Ok(pos_before as usize);
+            }
+            Err(e) => return Err(format!("rustls read_tls: {}", e)),
+        };
+        if let Err(e) = tls.process_new_packets() {
+            return Err(tls_io_err_hint(chunk, e));
+        }
+        if n == 0 && cur.position() == pos_before {
+            return Err(format!(
+                "rustls read_tls made no progress ({} bytes left in TCP segment)",
+                chunk.len() - pos_before as usize
+            ));
+        }
+        // Stop pumping once rustls has ~14 KiB of plaintext queued so the next record never trips
+        // the 16 KiB cap. The caller will drain in `tls_read_plain_wasm`'s step (1).
+        if (cur.position() as usize) < chunk.len() && plaintext_buffer_at_cap(tls) {
+            return Ok(cur.position() as usize);
+        }
+    }
+    Ok(chunk.len())
+}
+
+/// rustls 0.23 surfaces this case as `io::Error::other("received plaintext buffer full")`. We
+/// match by message because it's the documented public contract.
+fn is_plaintext_buffer_full(e: &std::io::Error) -> bool {
+    let s = e.to_string();
+    s.contains("plaintext buffer full") || s.contains("plaintext buffer is full")
+}
+
+/// Heuristic that mirrors the native crate: use `IoState::plaintext_bytes_to_read()` and stop
+/// feeding 2 KiB before the documented cap so the next ciphertext record always fits.
+fn plaintext_buffer_at_cap(tls: &mut ClientConnection) -> bool {
+    match tls.process_new_packets() {
+        Ok(state) => state.plaintext_bytes_to_read() >= 14 * 1024,
+        Err(_) => false,
     }
 }
 

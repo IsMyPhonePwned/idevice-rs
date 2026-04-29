@@ -7,6 +7,7 @@ mod tcp;
 mod wire;
 
 pub mod lockdown_proto;
+pub mod pcapd_proto;
 pub mod screenshotr_proto;
 
 pub use lockdown_proto::{parse_get_value_string, PairingIds, LOCKDOWN_TLS_SETTLE_MS};

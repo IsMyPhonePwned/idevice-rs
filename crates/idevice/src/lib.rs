@@ -37,6 +37,7 @@ pub mod lockdown;
 pub mod lockdown_rustls;
 pub mod mux_link;
 pub mod pair_record;
+pub mod pcapd;
 pub mod screenshotr;
 pub mod syslog_relay;
 pub mod usb;
@@ -50,3 +51,21 @@ mod socket_mux;
 mod usbmuxd;
 
 mod pair_record_parse;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `set_diagnostic_trace` flips a process-wide atomic — verify both transitions
+    /// observably and reset to the original value on the way out so we don't pollute
+    /// shared state for other tests.
+    #[test]
+    fn diagnostic_trace_toggle_is_observable() {
+        let prev = diagnostic_trace_enabled();
+        set_diagnostic_trace(true);
+        assert!(diagnostic_trace_enabled(), "expected trace flag = true");
+        set_diagnostic_trace(false);
+        assert!(!diagnostic_trace_enabled(), "expected trace flag = false");
+        set_diagnostic_trace(prev);
+    }
+}

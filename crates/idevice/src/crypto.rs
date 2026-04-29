@@ -33,7 +33,7 @@ pub struct HostKeys {
     pub root_private_der: Vec<u8>,
     /// In-memory root CA only for **generated** keys (signing the device leaf in [`build_device_certificate`]).
     /// **`None`** for plist-loaded keys (TLS uses PEM/DER only; libimobiledevice roots may use signature OIDs rcgen cannot parse).
-    root_ca: Option<Arc<Certificate>>,
+    pub(crate) root_ca: Option<Arc<Certificate>>,
 }
 
 impl HostKeys {
@@ -326,4 +326,116 @@ pub fn host_keys_from_pair_record_pems(
         );
     }
     Ok(keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pair_cert_validity_window_is_skewed_and_long_enough() {
+        let (nb, na) = pair_cert_validity_window();
+        let now = OffsetDateTime::now_utc();
+        // NotBefore is at least ~30s in the past (skewed by 1 minute, allowing a little
+        // wall-clock drift between the two `now` reads).
+        assert!(nb < now, "NotBefore should be in the past");
+        assert!(now - nb >= Duration::seconds(30));
+        // NotAfter is roughly 10 years out (allow plenty of slack for slow runners).
+        assert!(na - now >= Duration::days(365 * 9));
+    }
+
+    #[test]
+    fn sha256_cert_prefix_is_hex_8_bytes() {
+        let p = sha256_cert_prefix(&[0u8; 4]);
+        assert_eq!(p.len(), 16);
+        assert!(p.chars().all(|c| c.is_ascii_hexdigit()));
+        // Same input → same output (deterministic).
+        assert_eq!(sha256_cert_prefix(&[0u8; 4]), p);
+        assert_ne!(sha256_cert_prefix(&[1u8; 4]), p);
+    }
+
+    #[test]
+    fn cert_alg_is_pkcs_rsa_sha256() {
+        assert!(std::ptr::eq(cert_alg(), &rcgen::PKCS_RSA_SHA256));
+    }
+
+    #[test]
+    fn first_pem_certificate_der_extracts_first_block() {
+        let pem = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n\
+                   -----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n";
+        let der = first_pem_certificate_der(pem).unwrap();
+        // base64 "AAAA" → 0x00 0x00 0x00
+        assert_eq!(der, vec![0u8, 0, 0]);
+    }
+
+    #[test]
+    fn first_pem_certificate_der_skips_non_cert_blocks() {
+        let pem = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n\
+                   -----BEGIN CERTIFICATE-----\nBBBB\n-----END CERTIFICATE-----\n";
+        let der = first_pem_certificate_der(pem).unwrap();
+        // base64 "BBBB" → 0x04 0x10 0x41
+        assert_eq!(der, vec![0x04u8, 0x10, 0x41]);
+    }
+
+    #[test]
+    fn first_pem_certificate_der_errors_when_no_cert_present() {
+        let pem = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n";
+        let err = first_pem_certificate_der(pem).unwrap_err();
+        assert!(err.contains("no PEM CERTIFICATE"));
+    }
+
+    /// `generate_host_keys` is heavyweight (two RSA-2048 keypairs + a self-signed chain);
+    /// run it once and reuse the bundle for assertions about its shape and round-trips.
+    #[test]
+    fn generate_host_keys_round_trips_through_pair_record_loader() {
+        let bundle = generate_host_keys().expect("generate_host_keys");
+
+        assert!(bundle.can_sign_device_leaf());
+        assert!(bundle.private_key_pem.contains("BEGIN PRIVATE KEY"));
+        assert!(bundle.host_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(bundle.root_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(bundle.root_private_pem.contains("BEGIN PRIVATE KEY"));
+
+        assert!(!bundle.host_cert_der.is_empty());
+        assert!(!bundle.root_cert_der.is_empty());
+        assert!(!bundle.private_key_der.is_empty());
+        assert!(!bundle.root_private_der.is_empty());
+        // DER decodes match the PEM blocks we exposed.
+        assert_eq!(
+            first_pem_certificate_der(&bundle.host_cert_pem).unwrap(),
+            bundle.host_cert_der
+        );
+        assert_eq!(
+            first_pem_certificate_der(&bundle.root_cert_pem).unwrap(),
+            bundle.root_cert_der
+        );
+
+        // Loading the same PEMs back via the libimobiledevice-style entry point yields a
+        // bundle without an in-memory root CA but with the same DERs.
+        let loaded = host_keys_from_pair_record_pems(
+            bundle.private_key_pem.clone(),
+            bundle.host_cert_pem.clone(),
+            bundle.root_cert_pem.clone(),
+            bundle.root_private_pem.clone(),
+        )
+        .expect("host_keys_from_pair_record_pems");
+
+        assert!(!loaded.can_sign_device_leaf(), "plist-loaded bundle has no rcgen CA");
+        assert_eq!(loaded.host_cert_der, bundle.host_cert_der);
+        assert_eq!(loaded.root_cert_der, bundle.root_cert_der);
+    }
+
+    #[test]
+    fn host_keys_from_pair_record_rejects_garbage_pems() {
+        let err = match host_keys_from_pair_record_pems(
+            "not a pem".to_string(),
+            "not a pem".to_string(),
+            "not a pem".to_string(),
+            "not a pem".to_string(),
+        ) {
+            Ok(_) => panic!("expected garbage PEMs to be rejected"),
+            Err(e) => e,
+        };
+        assert!(err.contains("PEM") || err.contains("CERTIFICATE"));
+    }
 }

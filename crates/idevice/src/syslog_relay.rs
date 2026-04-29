@@ -144,3 +144,71 @@ fn relay_framed_cleartext<W: Write>(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(payload: &[u8]) -> Vec<u8> {
+        let mut v = (payload.len() as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(payload);
+        v
+    }
+
+    #[test]
+    fn drain_framed_emits_complete_payload() {
+        let mut buf = make_frame(b"hello world");
+        let mut out = Vec::new();
+        drain_framed(&mut buf, &mut out).unwrap();
+        assert_eq!(out, b"hello world");
+        assert!(buf.is_empty(), "fully consumed buffer");
+    }
+
+    #[test]
+    fn drain_framed_keeps_partial_frame_in_buffer() {
+        // Length prefix says 10 bytes but we only feed 5.
+        let mut buf = vec![0, 0, 0, 10, b'p', b'a', b'r', b't', b'i'];
+        let mut out = Vec::new();
+        drain_framed(&mut buf, &mut out).unwrap();
+        assert!(out.is_empty(), "no full frame yet, nothing should be emitted");
+        assert_eq!(buf.len(), 9, "buffer is preserved verbatim until more data arrives");
+    }
+
+    #[test]
+    fn drain_framed_handles_back_to_back_frames() {
+        let mut buf = make_frame(b"AAA");
+        buf.extend(make_frame(b"BB"));
+        buf.extend(make_frame(b"CCCC"));
+        let mut out = Vec::new();
+        drain_framed(&mut buf, &mut out).unwrap();
+        assert_eq!(out, b"AAABBCCCC");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_framed_skips_zero_length_frames() {
+        let mut buf = vec![0, 0, 0, 0]; // single zero-length frame
+        buf.extend(make_frame(b"ok"));
+        let mut out = Vec::new();
+        drain_framed(&mut buf, &mut out).unwrap();
+        assert_eq!(out, b"ok");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn drain_framed_returns_when_buffer_too_small_for_length() {
+        let mut buf = vec![0u8, 0, 0]; // <4 bytes
+        let mut out = Vec::new();
+        drain_framed(&mut buf, &mut out).unwrap();
+        assert!(out.is_empty());
+        assert_eq!(buf, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn drain_framed_rejects_oversized_frames() {
+        let mut buf = ((MAX_SYSLOG_FRAME as u32) + 1).to_be_bytes().to_vec();
+        let mut out = Vec::new();
+        let err = drain_framed(&mut buf, &mut out).unwrap_err();
+        assert!(err.contains("exceeds max"));
+    }
+}
+

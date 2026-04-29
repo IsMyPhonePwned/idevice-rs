@@ -14,3 +14,8 @@ idevice = { path = "../idevice", features = ["with-clap"] }
 idevice-usb-core = { path = "../idevice-usb-core" }
 clap = { version = "4", features = ["derive"] }
 time = { version = "0.3", default-features = false, features = ["macros", "std"] }
+
+[target.'cfg(unix)'.dependencies]
+# Used by `pcap -o -` (stdout) so we can `dup2(2, 1)` and route every `println!` from helper
+# functions to stderr without rewriting them, while keeping a raw FD for the libpcap bytes.
+libc = "0.2"

@@ -372,6 +372,7 @@ cargo run -p idevice-cli -- battery --pair-record-dir /var/lib/lockdown
 | `diagnostics` | Same as `battery`, then ~40 lockdown **`GetValue`** queries grouped into Identity, Network/cellular, Locale, Activation, Storage (with human-readable byte counts), iTunes, and Battery — **not** Apple sysdiagnose. |
 | `syslog` | After TLS, **`StartService` → `com.apple.syslog_relay`**, stream to stdout or `-o FILE` (like `idevicesyslog`; direct USB mux only). |
 | `screenshot [PATH]` | After TLS, **`StartService` → `com.apple.mobile.screenshotr`**, run the DeviceLink handshake and save one PNG/TIFF (like `idevicescreenshot`). Requires a mounted Developer Disk Image. |
+| `pcap -o FILE` | After TLS, **`StartService` → `com.apple.pcapd`**, decode each `device_packet_struct`, write a libpcap (`LINKTYPE_ETHERNET`) file Wireshark can open (like `pymobiledevice3 pcap`). Optional `--filter-process` / `--filter-interface` / `--max-packets` / `--max-bytes`. |
 | `crash-reports OUT_DIR` | After TLS, open **`com.apple.crashreportmover`** + **AFC** to **`com.apple.crashreportcopymobile`**, copy logs into `OUT_DIR` (like `idevicecrashreport`). |
 
 `cargo run -p idevice-cli -- <CMD> --help` prints the full clap help with defaults.
@@ -476,6 +477,58 @@ cargo run -p idevice-cli -- screenshot ./shots/home          # writes ./shots/ho
 cargo run -p idevice-cli -- screenshot lockscreen.png        # writes lockscreen.png exactly
 cargo run -p idevice-cli -- screenshot --pair-record-dir /var/lib/lockdown
 ```
+
+#### `pcap -o FILE`
+
+After `StartSession` + TLS, calls **`StartService("com.apple.pcapd")`**, opens a **second** mux pseudo-TCP, upgrades it to TLS, then loops decoding `<u32 BE length><bplist00 of CFData(device_packet_struct)>` frames. Each accepted frame becomes one **libpcap** record (`LINKTYPE_ETHERNET`, snaplen `65535`) — Wireshark / `tcpdump -r FILE` open it directly. Cellular packets (`pdp_ip*`, `frame_pre_length == 0`) get a synthetic Ethernet II header so IPv4/IPv6 dissectors stay happy, exactly like `pymobiledevice3 pcap`.
+
+```text
+                +-------------------+         +---------------------+
+TLS plaintext   | u32 BE length     |  bplist | Value::Data(...)    |
+read loop  ---> |  of plist payload | -----> | parse device_packet  |
+                +-------------------+         +---------------------+
+                                                       |
+                                                       v
+              [16-byte rec hdr][14-byte fake Ethernet][raw IP packet]   --> .pcap
+```
+
+| Arg / Flag | Default | Description |
+|------------|---------|-------------|
+| `-o, --output FILE` | — | Output libpcap path. Use `-` to write to stdout (e.g. `… pcap -o - --quiet | wireshark -k -i -`). |
+| `--max-packets N` | `0` (∞) | Stop after writing `N` accepted records to the file. |
+| `--max-bytes N` | `0` (∞) | Stop once the libpcap file exceeds `N` bytes (header + records). |
+| `--filter-process VAL` | none | Drop packets whose pid/comm/ecomm doesn't match `VAL` (numeric pid or process name). Same semantics as `pymobiledevice3 pcap --process`. |
+| `--filter-interface IF` | none | Drop packets whose `interface_name` isn't `IF` (`en0`, `pdp_ip0`, `awdl0`, …). |
+| `--quiet` | off | Suppress the per-packet status line (handy when streaming to stdout). |
+
+```bash
+# Capture 200 packets to capture.pcap, then open it
+cargo run -p idevice-cli -- pcap -o capture.pcap --max-packets 200
+wireshark capture.pcap
+
+# Live tail through tcpdump (every banner / status line is routed to stderr in `-o -` mode so
+# stdout stays a pure libpcap byte stream; otherwise tcpdump rejects it as "unknown file format")
+cargo run -p idevice-cli -- pcap -o - --quiet | tcpdump -r - -nn
+cargo run -p idevice-cli -- pcap -o - --quiet | wireshark -k -i -
+
+# Only Safari traffic on cellular
+cargo run -p idevice-cli -- pcap -o safari-cell.pcap \
+  --filter-process mobilesafari --filter-interface pdp_ip0
+```
+
+> When `-o -` is selected the CLI swaps process **fd 1 → fd 2** before any of the pair / TLS
+> helpers run, so every `println!` from the existing flow lands on stderr while the libpcap
+> bytes flow on the original stdout FD. Downstream pipes that close early (`tcpdump | head`,
+> Wireshark window closed, …) are detected and exit cleanly instead of panicking with
+> `failed printing to stdout: Broken pipe`.
+
+> The TLS feeder used by `pcap` / `syslog` / `screenshot` / `crash-reports` interleaves
+> **feed → process → drain → repeat** on each ciphertext segment instead of consuming it whole.
+> iOS bursts can pack multiple ~16 KiB TLS records back-to-back inside one mux segment; rustls
+> caps its decrypted-plaintext buffer at `MAX_PLAINTEXT_SIZE = 16 KiB` and otherwise rejects
+> further `read_tls` with `received plaintext buffer full`. Any unfed ciphertext is parked on
+> `TcpConn::pending_tls_in` and consumed on the next call so record order is preserved across
+> reads.
 
 #### `crash-reports OUT_DIR`
 
@@ -643,6 +696,7 @@ See [How it works (technical)](#how-it-works-technical) for ASCII diagrams of mu
 | `crashreportmover` + AFC crash copy | ✅ — second mux TCP + TLS, files streamed to browser | ✅ |
 | `syslog_relay` (live stream + Save) | ✅ — second mux TCP + TLS, chunks pushed via `onChunk` callback | ✅ |
 | `mobile.screenshotr` (PNG / TIFF) | ✅ — second mux TCP + TLS, DeviceLink handshake, image bytes returned | ✅ — `screenshot [PATH]` subcommand |
+| `pcapd` (RVI → libpcap) | ✅ — second mux TCP + TLS, framed CFData decoded into libpcap records, full `.pcap` returned to JS for download | ✅ — `pcap -o FILE` subcommand (filters, max packets/bytes/duration; `-o -` streams to stdout for `tcpdump -r -`) |
 | usbmuxd Unix-socket fallback (Linux) | ❌ (Chromium can't talk to `/var/run/usbmuxd`) | ✅ |
 
 #### Index.html action map
@@ -658,6 +712,7 @@ See [How it works (technical)](#how-it-works-technical) for ASCII diagrams of mu
 | **Step 3 → Fetch with plist** | Pair-record-only path: `StartSession` + TLS + the same sectioned report (no `Pair`). | `lockdownFetchWithPlistXml` |
 | **Step 3 → Take screenshot** | After TLS, opens `com.apple.mobile.screenshotr` on a secondary mux TCP, performs the DeviceLink version exchange, then sends `ScreenShotRequest`. The reply (PNG on iOS 9+, TIFF on older releases) is shown inline as `<img>` and can be saved as `screenshot-<UTC>.<ext>`. Requires a mounted Developer Disk Image. | `lockdownScreenshot` |
 | **Step 3 → Stream syslog** | After TLS, opens `com.apple.syslog_relay` on a secondary mux TCP. Decoded text is rendered live in a pane (with optional substring filter, highlight, mirror-to-log, and auto-scroll). **Stop** ends the stream cooperatively; **Save…** downloads the captured bytes as `syslog-<UTC>.log`. | `lockdownSyslog` |
+| **Step 3 → Capture network** | After TLS, opens `com.apple.pcapd` on a secondary mux TCP, decodes each `device_packet_struct` and grows a libpcap (`LINKTYPE_ETHERNET`) buffer in memory. The live pane shows one row per accepted packet (direction, interface, pid, comm, bytes); **Save .pcap** downloads `idevice-<UTC>.pcap` for Wireshark / `tcpdump -r`. Filters mirror the CLI (`process` / `interface`, `max-packets` / `max-bytes` / `max-duration`). | `lockdownPcap` |
 | **Step 3 → Crash reports** | After TLS, opens `crashreportmover` + AFC and streams files into a per-file table with **Save** / **Save all** buttons. | `lockdownCrashReports` |
 
 #### TLS knobs (advanced toggle in step 3)

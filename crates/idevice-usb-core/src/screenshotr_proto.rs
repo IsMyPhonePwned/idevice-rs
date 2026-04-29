@@ -286,4 +286,123 @@ mod tests {
         assert_eq!(detect_image_extension(b"II\x2a\x00xxxx"), "tiff");
         assert_eq!(detect_image_extension(b"binary-blob"), "dat");
     }
+
+    #[test]
+    fn detect_image_mime_matches_extension() {
+        assert_eq!(detect_image_mime(b"\x89PNG\r\n\x1a\n"), "image/png");
+        assert_eq!(detect_image_mime(b"MM\x00\x2axxxx"), "image/tiff");
+        assert_eq!(detect_image_mime(b"random"), "application/octet-stream");
+        assert_eq!(detect_image_extension(b""), "dat");
+    }
+
+    #[test]
+    fn build_screenshot_request_is_valid_dl_envelope() {
+        let bytes = build_screenshot_request().unwrap();
+        let v: Value = plist::from_bytes(&bytes).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].as_string().unwrap(), "DLMessageProcessMessage");
+        let inner = arr[1].as_dictionary().unwrap();
+        assert_eq!(
+            inner.get("MessageType").and_then(|v| v.as_string()),
+            Some("ScreenShotRequest")
+        );
+    }
+
+    #[test]
+    fn build_disconnect_uses_canonical_empty_parameter_string() {
+        let bytes = build_disconnect().unwrap();
+        let v: Value = plist::from_bytes(&bytes).unwrap();
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr[0].as_string().unwrap(), "DLMessageDisconnect");
+        assert_eq!(arr[1].as_string().unwrap(), "___EmptyParameterString___");
+    }
+
+    #[test]
+    fn frame_plist_message_prepends_u32_be_length() {
+        let payload = b"hello bplist";
+        let framed = frame_plist_message(payload);
+        assert_eq!(framed.len(), 4 + payload.len());
+        let len = u32::from_be_bytes(framed[0..4].try_into().unwrap()) as usize;
+        assert_eq!(len, payload.len());
+        assert_eq!(&framed[4..], payload);
+
+        // Empty payload still gets a 4-byte length prefix.
+        let empty = frame_plist_message(&[]);
+        assert_eq!(empty, [0u8; 4]);
+    }
+
+    #[test]
+    fn parse_dl_device_ready_accepts_canonical_message() {
+        let arr = Value::Array(vec![Value::String("DLMessageDeviceReady".into())]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        parse_dl_device_ready(&buf).unwrap();
+    }
+
+    #[test]
+    fn parse_dl_device_ready_rejects_non_ready_messages() {
+        let arr = Value::Array(vec![Value::String("DLMessageDisconnect".into())]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        let err = parse_dl_device_ready(&buf).unwrap_err();
+        assert!(err.contains("DLMessageDeviceReady"));
+
+        // Non-DL command is also rejected.
+        let arr = Value::Array(vec![Value::String("Something".into())]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        assert!(parse_dl_device_ready(&buf).is_err());
+    }
+
+    #[test]
+    fn parse_screenshot_reply_rejects_wrong_message_type() {
+        let mut inner = plist::Dictionary::new();
+        inner.insert("MessageType".into(), Value::String("Bogus".into()));
+        inner.insert("ScreenShotData".into(), Value::Data(vec![1, 2, 3]));
+        let arr = Value::Array(vec![
+            Value::String("DLMessageProcessMessage".into()),
+            Value::Dictionary(inner),
+        ]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        assert!(parse_screenshot_reply(&buf)
+            .unwrap_err()
+            .contains("ScreenShotReply"));
+    }
+
+    #[test]
+    fn parse_screenshot_reply_rejects_missing_data() {
+        let mut inner = plist::Dictionary::new();
+        inner.insert("MessageType".into(), Value::String("ScreenShotReply".into()));
+        let arr = Value::Array(vec![
+            Value::String("DLMessageProcessMessage".into()),
+            Value::Dictionary(inner),
+        ]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        assert!(parse_screenshot_reply(&buf)
+            .unwrap_err()
+            .contains("ScreenShotData"));
+    }
+
+    #[test]
+    fn parse_dl_version_exchange_rejects_wrong_command() {
+        let arr = Value::Array(vec![
+            Value::String("DLMessageBogus".into()),
+            Value::Integer(400u64.into()),
+            Value::Integer(0u64.into()),
+        ]);
+        let mut buf = Vec::new();
+        arr.to_writer_binary(&mut buf).unwrap();
+        assert!(parse_dl_version_exchange(&buf).is_err());
+    }
+
+    #[test]
+    fn default_screenshot_basename_is_zero_padded() {
+        assert_eq!(
+            default_screenshot_basename(2026, 1, 2, 3, 4, 5),
+            "screenshot-2026-01-02-03-04-05"
+        );
+    }
 }
