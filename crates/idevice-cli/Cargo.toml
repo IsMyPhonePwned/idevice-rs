@@ -3,6 +3,7 @@ name = "idevice-cli"
 version = "0.1.0"
 edition = "2021"
 description = "CLI for Apple USB mux + lockdownd (pair, battery, diagnostics, syslog, crash reports)"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]

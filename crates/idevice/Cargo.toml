@@ -3,6 +3,7 @@ name = "idevice"
 version = "0.1.0"
 edition = "2021"
 description = "Apple USB mux, lockdownd, AFC — reusable library for CLI and other Rust projects"
+license = "GPL-3.0-only"
 publish = false
 
 [features]

@@ -3,6 +3,7 @@ name = "idevice-usb-core"
 version = "0.1.0"
 edition = "2021"
 description = "Shared Apple USB mux framing and lockdownd plist helpers for native and WebUSB builds"
+license = "GPL-3.0-only"
 publish = false
 
 [dependencies]
