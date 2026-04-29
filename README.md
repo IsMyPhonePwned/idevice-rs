@@ -1,5 +1,9 @@
 # idevice-rs
 
+<p align="center">
+  <img src=".github/logo.png" alt="idevice-rs: Rust (Ferris) and Apple device tooling" width="420" />
+</p>
+
 Pure-Rust toolkit for talking to **iOS / iPadOS** devices over the **Apple USB mux** protocol — both from a native CLI and from a Chromium tab via **WebUSB + WASM**. Roughly the same job as the libimobiledevice family of tools (`ideviceinfo`, `idevicepair`, `idevicesyslog`, `idevicecrashreport`, `pymobiledevice3 pcap`), but with no usbmuxd dependency in the default flow.
 
 ```
