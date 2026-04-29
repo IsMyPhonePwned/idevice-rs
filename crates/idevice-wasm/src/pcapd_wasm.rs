@@ -64,8 +64,16 @@ impl StopReason {
     }
 }
 
-/// Build the per-packet JS object passed to `on_packet(...)`. Mirrors the native [`PcapEvent`].
-fn make_event(rec: &PcapdRecord, packet_index: u64, frame_len: usize) -> Result<JsValue, JsValue> {
+/// Build the per-packet JS object passed to `on_packet(...)`. Mirrors the native [`PcapEvent`]
+/// but, to let the browser do live protocol decoding (Ethernet → IP → TCP/UDP/DNS/TLS-SNI/HTTP),
+/// also exposes the **raw Ethernet frame** as a `Uint8Array` under the `frame` key. This is the
+/// exact same byte stream that ends up in the final libpcap blob, so JS can dissect it in
+/// real-time without having to re-parse the in-memory pcap on every callback.
+fn make_event(
+    rec: &PcapdRecord,
+    packet_index: u64,
+    frame: &[u8],
+) -> Result<JsValue, JsValue> {
     let obj = js_sys::Object::new();
     js_sys::Reflect::set(
         &obj,
@@ -98,8 +106,14 @@ fn make_event(rec: &PcapdRecord, packet_index: u64, frame_len: usize) -> Result<
     js_sys::Reflect::set(
         &obj,
         &JsValue::from_str("bytes"),
-        &JsValue::from_f64(frame_len as f64),
+        &JsValue::from_f64(frame.len() as f64),
     )?;
+    // Raw Ethernet frame copy — JS owns it and can keep it past this callback. ~MTU-sized so the
+    // copy is cheap; the alternative (memory view) is dangerous because the underlying buffer
+    // gets recycled by the next packet.
+    let frame_u8 = js_sys::Uint8Array::new_with_length(frame.len() as u32);
+    frame_u8.copy_from(frame);
+    js_sys::Reflect::set(&obj, &JsValue::from_str("frame"), &frame_u8.into())?;
     js_sys::Reflect::set(
         &obj,
         &JsValue::from_str("seconds"),
@@ -189,7 +203,7 @@ fn drain_frames(
         pcap.extend_from_slice(&frame);
         *packets_written = packets_written.saturating_add(1);
 
-        let event = make_event(&rec, *packets_written, frame.len()).map_err(|_| {
+        let event = make_event(&rec, *packets_written, &frame).map_err(|_| {
             "pcap: failed to allocate JS event object — likely OOM".to_string()
         })?;
         let cb_result = on_packet

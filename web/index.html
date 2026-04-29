@@ -30,7 +30,11 @@
       padding: 1.25rem;
       line-height: 1.45;
     }
-    main { max-width: 44rem; margin: 0 auto; }
+    main { max-width: 72rem; margin: 0 auto; }
+    /* Up to ~38 rem we collapse most two-column rows; above that we get the wide layout. */
+    @media (min-width: 60rem) {
+      body { padding: 1.5rem 1.75rem; }
+    }
     header.app-head { display: flex; align-items: baseline; gap: 0.6rem; margin: 0 0 0.4rem; flex-wrap: wrap; }
     header.app-head h1 { font-size: 1.3rem; margin: 0; }
     header.app-head .tag { font-size: 0.78rem; color: var(--muted); }
@@ -194,10 +198,10 @@
       background: #07080c;
       border: 1px solid var(--line-2);
       font-family: var(--mono);
-      font-size: 0.76rem;
+      font-size: 0.78rem;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 28rem;
+      max-height: 34rem;
       overflow: auto;
       color: #c4c8d4;
     }
@@ -243,13 +247,13 @@
       background: #07080c;
       border: 1px solid var(--line-2);
       font-family: var(--mono);
-      font-size: 0.74rem;
+      font-size: 0.78rem;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 22rem;
+      max-height: 30rem;
       overflow: auto;
       color: #c4c8d4;
-      line-height: 1.35;
+      line-height: 1.4;
     }
     pre#syslog-out .hl { background: rgba(52, 211, 153, 0.16); color: var(--text); }
 
@@ -328,6 +332,312 @@
       background: linear-gradient(90deg, var(--accent), #60a5fa);
       transition: width 320ms ease;
     }
+
+    /* Action cards (Step 3) */
+    .action-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.022), rgba(255,255,255,0.005));
+      padding: 0.85rem 0.95rem;
+      margin: 0.55rem 0;
+      transition: border-color 200ms ease;
+    }
+    .action-card:hover { border-color: var(--line); }
+    .action-card[data-state="running"] { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+    .action-card[data-state="ok"]      { border-color: var(--accent-line); }
+    .action-card[data-state="err"]     { border-color: rgba(248, 113, 113, 0.4); }
+    .ac-head {
+      display: flex;
+      gap: 0.7rem;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+    .ac-icon {
+      width: 2rem; height: 2rem;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--accent-line);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ac-icon svg { width: 1.05rem; height: 1.05rem; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .ac-title { flex: 1 1 auto; min-width: 0; }
+    .ac-title h3 {
+      margin: 0;
+      font-size: 0.95rem;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    .ac-title .ac-sub {
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 0.05rem;
+      line-height: 1.35;
+    }
+    .ac-pill {
+      flex: 0 0 auto;
+      padding: 0.18rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      background: var(--bg-2);
+      white-space: nowrap;
+      font-weight: 600;
+    }
+    .action-card[data-state="running"] .ac-pill { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+    .action-card[data-state="ok"]      .ac-pill { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+    .action-card[data-state="err"]     .ac-pill { color: var(--danger); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); }
+    .ac-body { display: grid; gap: 0.4rem; }
+    .ac-body details.toggle-block { margin: 0.2rem 0; }
+    .ac-result {
+      margin-top: 0.45rem;
+      padding-top: 0.55rem;
+      border-top: 1px dashed var(--line-2);
+    }
+
+    /* Pcap packet inspector */
+    .pcap-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem 0.65rem;
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin: 0.35rem 0 0.45rem;
+      align-items: center;
+    }
+    .pcap-summary .stat {
+      padding: 0.18rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid var(--line-2);
+      background: var(--bg-2);
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+    .pcap-summary .stat .lbl { color: var(--muted); margin-right: 0.3rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .pcap-summary .live-dot {
+      display: inline-block;
+      width: 0.55rem; height: 0.55rem;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 var(--accent-line);
+      margin-right: 0.4rem;
+      vertical-align: middle;
+    }
+    .pcap-summary[data-state="running"] .live-dot {
+      animation: live-pulse 1.1s ease-in-out infinite;
+    }
+    .pcap-summary[data-state="idle"] .live-dot { background: var(--muted); animation: none; }
+    .pcap-summary[data-state="stalled"] .live-dot { background: var(--warn); animation: live-pulse 2s ease-in-out infinite; }
+    .pcap-summary[data-state="ok"] .live-dot { background: var(--accent); animation: none; }
+    .pcap-summary[data-state="err"] .live-dot { background: var(--danger); animation: none; }
+    @keyframes live-pulse {
+      0%   { box-shadow: 0 0 0 0 var(--accent-line); transform: scale(1); }
+      70%  { box-shadow: 0 0 0 0.45rem rgba(52, 211, 153, 0); transform: scale(1.08); }
+      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); transform: scale(1); }
+    }
+
+    .pcap-controls {
+      display: flex;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 0.25rem 0 0.4rem;
+      font-size: 0.78rem;
+    }
+    .pcap-controls input[type="search"] {
+      flex: 1 1 14rem;
+      max-width: 28rem;
+    }
+    .pcap-controls .seg-btn {
+      padding: 0.32rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--bg-2);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.74rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      transition: color 120ms, border-color 120ms;
+    }
+    .pcap-controls .seg-btn:hover { color: var(--text); border-color: var(--line); }
+    .pcap-controls .seg-btn[data-on="1"] { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+
+    .pcap-table-wrap {
+      max-height: 36rem;
+      overflow: auto;
+      border-radius: 8px;
+      border: 1px solid var(--line-2);
+      background: #07080c;
+    }
+    table.pcap-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      table-layout: auto;
+    }
+    /* Give the info column the lion's share so SNI / qnames / HTTP paths have room to breathe. */
+    .pcap-table th.col-info, .pcap-table td.info { width: auto; min-width: 18rem; }
+    .pcap-table th.col-num,  .pcap-table td.col-num  { width: 3.5rem; }
+    .pcap-table th.col-t,    .pcap-table td.col-t    { width: 4.5rem; }
+    .pcap-table th.col-dir,  .pcap-table td.col-dir  { width: 3rem; }
+    .pcap-table th.col-iface, .pcap-table td.col-iface { width: 5.5rem; }
+    .pcap-table th.col-proc, .pcap-table td.col-proc { width: 8.5rem; }
+    .pcap-table th.col-flow, .pcap-table td.col-flow { width: 19rem; }
+    .pcap-table th.col-proto,.pcap-table td.col-proto{ width: 4.2rem; }
+    .pcap-table th.col-len,  .pcap-table td.col-len  { width: 3.8rem; }
+    .pcap-table thead th {
+      position: sticky; top: 0;
+      background: #0c0e14;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 0.66rem;
+      letter-spacing: 0.06em;
+      padding: 0.4rem 0.55rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+      z-index: 1;
+    }
+    .pcap-table tbody tr.pcap-row {
+      cursor: pointer;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+    }
+    .pcap-table tbody tr.pcap-row:hover { background: rgba(255,255,255,0.025); }
+    .pcap-table tbody tr.pcap-row.expanded { background: rgba(52,211,153,0.06); }
+    .pcap-table tbody tr.pcap-row.expanded + tr.pcap-detail { display: table-row; }
+    .pcap-table tbody tr.pcap-detail { display: none; background: #050608; }
+    .pcap-table tbody tr.pcap-detail > td {
+      padding: 0;
+      border-bottom: 1px solid var(--line-2);
+    }
+    .pcap-table td {
+      padding: 0.32rem 0.55rem;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    /* Flow can overflow with IPv6 — let it wrap so the row stays readable instead of horizontal-scrolling. */
+    .pcap-table td.col-flow { white-space: normal; word-break: break-all; }
+    .pcap-table td.col-proc { overflow: hidden; text-overflow: ellipsis; }
+    .pcap-table td.info {
+      white-space: normal;
+      word-break: break-all;
+      color: #c4c8d4;
+      line-height: 1.45;
+    }
+    /* Inline highlights for the most "interesting" tokens decoder finds — surfaced without
+       having to expand the row. Keeps the eye drawn to hostnames, paths, and odd TCP flags. */
+    .pcap-table .hl-host    { color: #f9a8d4; font-weight: 600; }
+    .pcap-table .hl-path    { color: #93c5fd; font-weight: 600; }
+    .pcap-table .hl-method  {
+      display: inline-block;
+      padding: 0 0.32rem;
+      border-radius: 4px;
+      font-size: 0.66rem;
+      font-weight: 700;
+      background: rgba(52, 211, 153, 0.18);
+      color: var(--accent);
+      letter-spacing: 0.04em;
+      margin-right: 0.25rem;
+    }
+    .pcap-table .hl-key     { color: var(--muted); }
+    .pcap-table .hl-num     { color: #fde68a; }
+    .pcap-table .hl-flag    { color: #c4c8d4; }
+    .pcap-table .hl-flag.SYN, .pcap-table .hl-flag.FIN { color: var(--accent); font-weight: 600; }
+    .pcap-table .hl-flag.RST { color: var(--danger); font-weight: 700; }
+    .pcap-table .hl-flag.PSH { color: #93c5fd; }
+    .pcap-table .hl-flag.ACK { color: var(--muted); }
+    .pcap-table .hl-tag     {
+      display: inline-block;
+      padding: 0 0.3rem;
+      border-radius: 4px;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      background: rgba(244, 114, 182, 0.18);
+      color: #f9a8d4;
+      margin-right: 0.3rem;
+    }
+    .pcap-table .hl-tag.q   { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
+    .pcap-table .hl-tag.r   { background: rgba(52, 211, 153, 0.18); color: var(--accent); }
+    .pcap-table .hl-rcode-bad { color: var(--danger); font-weight: 700; }
+    .pcap-table .num   { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+    .pcap-table .dir   { color: var(--muted); }
+    .pcap-table .dir.in  { color: #60a5fa; }
+    .pcap-table .dir.out { color: #f5a524; }
+    .pcap-table .iface { color: var(--muted); }
+    .pcap-table .src   { color: #93a4ff; }
+    .pcap-table .dst   { color: #f5a524; }
+    .pcap-table .arrow { color: var(--muted); margin: 0 0.2rem; }
+    .pcap-table .proto-tag {
+      display: inline-block;
+      padding: 0.05rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .proto-TCP   { background: rgba(96, 165, 250, 0.16); color: #93c5fd; }
+    .proto-UDP   { background: rgba(52, 211, 153, 0.16); color: var(--accent); }
+    .proto-ICMP, .proto-ICMP6 { background: rgba(245, 165, 36, 0.16); color: var(--warn); }
+    .proto-DNS   { background: rgba(167, 139, 250, 0.18); color: #c4b5fd; }
+    .proto-TLS, .proto-HTTPS { background: rgba(244, 114, 182, 0.15); color: #f9a8d4; }
+    .proto-HTTP  { background: rgba(52, 211, 153, 0.18); color: var(--accent); }
+    .proto-other { background: var(--line-2); color: var(--muted); }
+
+    .pcap-detail-pane {
+      padding: 0.55rem 0.7rem 0.7rem;
+      font-size: 0.72rem;
+      color: #c4c8d4;
+      display: grid;
+      gap: 0.4rem;
+    }
+    .pcap-layer { padding: 0.35rem 0.55rem; border-radius: 6px; background: rgba(255,255,255,0.022); border: 1px solid var(--line-2); }
+    .pcap-layer .lt { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); margin-bottom: 0.18rem; font-weight: 600; }
+    .pcap-layer .kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.18rem 0.6rem; }
+    .pcap-layer .kv .k { color: var(--muted); }
+    .pcap-layer .kv .v { color: var(--text); word-break: break-word; }
+    .pcap-hex {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      background: #0a0b10;
+      border: 1px solid var(--line-2);
+      border-radius: 6px;
+      padding: 0.45rem 0.55rem;
+      max-height: 9rem;
+      overflow: auto;
+      color: #9ba0ad;
+      white-space: pre;
+    }
+    .pcap-empty { padding: 1rem; text-align: center; color: var(--muted); font-size: 0.78rem; }
+
+    .pcap-banner {
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+      padding: 0.55rem 0.8rem;
+      margin: 0.45rem 0;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      border: 1px solid var(--accent-line);
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+    .pcap-banner.warn   { border-color: rgba(245, 165, 36, 0.4); background: rgba(245, 165, 36, 0.08); }
+    .pcap-banner.danger { border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); }
+    .pcap-banner .b-title { font-weight: 600; color: var(--accent); }
+    .pcap-banner.warn   .b-title { color: var(--warn); }
+    .pcap-banner.danger .b-title { color: var(--danger); }
+    .pcap-banner .b-msg { color: var(--muted); flex: 1 1 auto; }
+    .pcap-banner button { margin-left: auto; }
 
     /* Mode segmented control */
     .seg {
@@ -528,168 +838,268 @@
       </details>
 
       <p class="hint">Each action does QueryType → (Pair if needed) → StartSession → optional TLS → service call.</p>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary" id="btn-bat" data-needs="dev,auth">
-          <span class="spinner" aria-hidden="true"></span><span>Battery</span>
-        </button>
-        <button type="button" class="btn" id="btn-diag" data-needs="dev,auth"
-          title="Identity + network + cellular + locale + activation + storage + battery snapshot via lockdown GetValue (~40 queries, sectioned report)">
-          <span class="spinner" aria-hidden="true"></span><span>Diagnostics</span>
-        </button>
-        <button type="button" class="btn" id="btn-plist-fetch" data-needs="dev,plist"
-          title="Full QueryType + StartSession + TLS + GetValue summary using a loaded pair-record plist">
-          <span class="spinner" aria-hidden="true"></span><span>Fetch with plist</span>
-        </button>
+
+      <!-- Lockdown queries -->
+      <div class="action-card" id="card-lockdown" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 12h3l3-7 4 14 3-9 2 4h3"/></svg>
+          </div>
+          <div class="ac-title">
+            <h3>Lockdown queries</h3>
+            <div class="ac-sub">QueryType → Pair → StartSession → TLS → <code>GetValue</code></div>
+          </div>
+          <span class="ac-pill" id="card-lockdown-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-bat" data-needs="dev,auth">
+              <span class="spinner" aria-hidden="true"></span><span>Battery</span>
+            </button>
+            <button type="button" class="btn" id="btn-diag" data-needs="dev,auth"
+              title="Identity + network + cellular + locale + activation + storage + battery (~40 GetValue queries, sectioned report)">
+              <span class="spinner" aria-hidden="true"></span><span>Diagnostics</span>
+            </button>
+            <button type="button" class="btn" id="btn-plist-fetch" data-needs="dev,plist"
+              title="Full QueryType + StartSession + TLS + GetValue summary using a loaded pair-record plist">
+              <span class="spinner" aria-hidden="true"></span><span>Fetch with plist</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <details class="toggle-block">
-        <summary>Screenshot (com.apple.mobile.screenshotr)</summary>
-        <p class="hint">
-          One-shot capture, like libimobiledevice <code>idevicescreenshot</code>. The phone returns
-          a PNG (iOS 9+) or TIFF, decoded over a secondary mux TCP + TLS via the DeviceLink
-          protocol. <strong>Requires a mounted Developer Disk Image</strong> — without it lockdownd
-          replies <code>InvalidService</code> and the button surfaces a friendly error.
-        </p>
-        <div class="btn-row">
-          <button type="button" class="btn" id="btn-screenshot" data-needs="dev,auth"
-            title="StartService(com.apple.mobile.screenshotr) → secondary TLS → DeviceLink version exchange → ScreenShotRequest → save PNG/TIFF">
-            <span class="spinner" aria-hidden="true"></span><span>Take screenshot</span>
-          </button>
-          <button type="button" class="btn btn-ghost" id="btn-screenshot-save" disabled>Save…</button>
-          <button type="button" class="btn btn-ghost" id="btn-screenshot-clear" disabled>Clear</button>
-        </div>
-        <div id="screenshot-area" hidden style="margin-top:0.4rem;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
-            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Captured screenshot</h2>
-            <span class="hint" id="screenshot-status" style="margin:0;"></span>
+      <!-- Screenshot -->
+      <div class="action-card" id="card-screenshot" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="13" r="3.2"/><path d="M9 6V4h6v2"/></svg>
           </div>
-          <div id="screenshot-frame">
-            <img id="screenshot-img" alt="Device screenshot" />
+          <div class="ac-title">
+            <h3>Screenshot</h3>
+            <div class="ac-sub"><code>com.apple.mobile.screenshotr</code> · DeviceLink · PNG/TIFF · requires mounted Developer Disk Image</div>
+          </div>
+          <span class="ac-pill" id="card-screenshot-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-screenshot" data-needs="dev,auth"
+              title="StartService(com.apple.mobile.screenshotr) → secondary TLS → DeviceLink version exchange → ScreenShotRequest → save PNG/TIFF">
+              <span class="spinner" aria-hidden="true"></span><span>Take screenshot</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-screenshot-save" disabled>Save…</button>
+            <button type="button" class="btn btn-ghost" id="btn-screenshot-clear" disabled>Clear</button>
+          </div>
+          <div id="screenshot-area" class="ac-result" hidden>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+              <h4 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Captured screenshot</h4>
+              <span class="hint" id="screenshot-status" style="margin:0;"></span>
+            </div>
+            <div id="screenshot-frame">
+              <img id="screenshot-img" alt="Device screenshot" />
+            </div>
           </div>
         </div>
-      </details>
+      </div>
 
-      <details class="toggle-block">
-        <summary>Syslog (com.apple.syslog_relay — live stream)</summary>
-        <div class="row two-col">
-          <div>
-            <label for="syslog-filter">Filter (case-insensitive substring)</label>
-            <input type="search" id="syslog-filter" placeholder="e.g. SpringBoard or assertiond" />
+      <!-- Syslog -->
+      <div class="action-card" id="card-syslog" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h13"/></svg>
           </div>
-          <div>
-            <label for="syslog-max-duration">Max duration (s, 0 = unlimited)</label>
-            <input type="text" id="syslog-max-duration" value="60" inputmode="numeric" />
+          <div class="ac-title">
+            <h3>Syslog stream</h3>
+            <div class="ac-sub"><code>com.apple.syslog_relay</code> · live decoded text · filter / save</div>
+          </div>
+          <span class="ac-pill" id="card-syslog-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <details class="toggle-block">
+            <summary>Capture options</summary>
+            <div class="row two-col">
+              <div>
+                <label for="syslog-filter">Filter (case-insensitive substring)</label>
+                <input type="search" id="syslog-filter" placeholder="e.g. SpringBoard or assertiond" />
+              </div>
+              <div>
+                <label for="syslog-max-duration">Max duration (s, 0 = unlimited)</label>
+                <input type="text" id="syslog-max-duration" value="60" inputmode="numeric" />
+              </div>
+            </div>
+            <div class="row two-col">
+              <div>
+                <label for="syslog-max-bytes">Max bytes (0 = unlimited)</label>
+                <input type="text" id="syslog-max-bytes" value="2097152" inputmode="numeric" />
+              </div>
+              <div>
+                <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="syslog-tail" checked /> Auto-scroll</label>
+                <label class="inline"><input type="checkbox" id="syslog-mirror" /> Mirror to log</label>
+              </div>
+            </div>
+            <p class="hint">
+              Reads block on WebUSB until the device sends data — if the phone is silent, <strong>Stop</strong> only takes
+              effect when the next syslog line arrives. Lock/unlock or open an app to flush the pipe.
+            </p>
+          </details>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-syslog" data-needs="dev,auth">
+              <span class="spinner" aria-hidden="true"></span><span>Stream syslog</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-syslog-stop" disabled>Stop</button>
+            <button type="button" class="btn btn-ghost" id="btn-syslog-save" disabled title="Download the full capture (raw bytes from the device, not the filtered view)">Save…</button>
+            <button type="button" class="btn btn-ghost" id="btn-syslog-clear" disabled>Clear</button>
+          </div>
+          <div id="syslog-area" class="ac-result" hidden>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+              <h4 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live syslog</h4>
+              <span class="hint" id="syslog-status" style="margin:0;"></span>
+            </div>
+            <pre id="syslog-out"></pre>
           </div>
         </div>
-        <div class="row two-col">
-          <div>
-            <label for="syslog-max-bytes">Max bytes (0 = unlimited)</label>
-            <input type="text" id="syslog-max-bytes" value="2097152" inputmode="numeric" />
-          </div>
-          <div>
-            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="syslog-tail" checked /> Auto-scroll</label>
-            <label class="inline"><input type="checkbox" id="syslog-mirror" /> Mirror to log</label>
-          </div>
-        </div>
-        <p class="hint">
-          Reads block on WebUSB until the device sends data — if the phone is silent, **Stop** only takes effect
-          when the next syslog line arrives. Lock/unlock or open an app to flush the pipe.
-        </p>
-        <div class="btn-row">
-          <button type="button" class="btn" id="btn-syslog" data-needs="dev,auth">
-            <span class="spinner" aria-hidden="true"></span><span>Stream syslog</span>
-          </button>
-          <button type="button" class="btn btn-ghost" id="btn-syslog-stop" disabled>Stop</button>
-          <button type="button" class="btn btn-ghost" id="btn-syslog-save" disabled title="Download the full capture (raw bytes from the device, not the filtered view)">Save…</button>
-          <button type="button" class="btn btn-ghost" id="btn-syslog-clear" disabled>Clear</button>
-        </div>
-        <div id="syslog-area" hidden style="margin-top:0.4rem;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
-            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live syslog</h2>
-            <span class="hint" id="syslog-status" style="margin:0;"></span>
-          </div>
-          <pre id="syslog-out"></pre>
-        </div>
-      </details>
+      </div>
 
-      <details class="toggle-block">
-        <summary>Network capture (com.apple.pcapd → Wireshark .pcap)</summary>
-        <p class="hint">
-          Streams the iOS Remote Virtual Interface (RVI) packets over a secondary mux TCP + TLS,
-          parses each `device_packet_struct`, and saves a classic libpcap file you can drop into
-          Wireshark / <code>tcpdump -r</code>. Cellular (<code>pdp_ip*</code>) packets get a
-          synthetic Ethernet header so they decode as IPv4/IPv6.
-        </p>
-        <div class="row two-col">
-          <div>
-            <label for="pcap-filter-process">Process filter (PID, comm, or ecomm — empty = all)</label>
-            <input type="search" id="pcap-filter-process" placeholder="e.g. mobilesafari or 73" />
+      <!-- Network capture -->
+      <div class="action-card" id="card-pcap" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 4 6 4 9s-1.5 6-4 9c-2.5-3-4-6-4-9s1.5-6 4-9z"/></svg>
           </div>
-          <div>
-            <label for="pcap-filter-iface">Interface filter (e.g. en0, pdp_ip0 — empty = all)</label>
-            <input type="search" id="pcap-filter-iface" placeholder="e.g. en0" />
+          <div class="ac-title">
+            <h3>Network capture</h3>
+            <div class="ac-sub"><code>com.apple.pcapd</code> RVI · live decoder (Ethernet→IP→TCP/UDP/DNS/TLS-SNI) · saves a Wireshark <code>.pcap</code></div>
+          </div>
+          <span class="ac-pill" id="card-pcap-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <details class="toggle-block">
+            <summary>Capture options</summary>
+            <div class="row two-col">
+              <div>
+                <label for="pcap-filter-process">Process filter (PID, comm, or ecomm — empty = all)</label>
+                <input type="search" id="pcap-filter-process" placeholder="e.g. mobilesafari or 73" />
+              </div>
+              <div>
+                <label for="pcap-filter-iface">Interface filter (e.g. en0, pdp_ip0 — empty = all)</label>
+                <input type="search" id="pcap-filter-iface" placeholder="e.g. en0" />
+              </div>
+            </div>
+            <div class="row two-col">
+              <div>
+                <label for="pcap-max-packets">Max packets (0 = unlimited)</label>
+                <input type="text" id="pcap-max-packets" value="0" inputmode="numeric" />
+              </div>
+              <div>
+                <label for="pcap-max-duration">Max duration (s, 0 = unlimited)</label>
+                <input type="text" id="pcap-max-duration" value="0" inputmode="numeric" />
+              </div>
+            </div>
+            <div class="row two-col">
+              <div>
+                <label for="pcap-max-bytes">Max pcap bytes (0 = unlimited)</label>
+                <input type="text" id="pcap-max-bytes" value="33554432" inputmode="numeric" />
+              </div>
+              <div>
+                <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="pcap-decode" checked /> Decode protocols (Ethernet/IP/TCP/UDP/DNS/TLS-SNI/HTTP)</label>
+                <label class="inline"><input type="checkbox" id="pcap-mirror" /> Mirror packet log to Output</label>
+              </div>
+            </div>
+            <p class="hint">
+              The whole <code>.pcap</code> file (libpcap, <code>LINKTYPE_ETHERNET</code>, snaplen 65535) is held in
+              memory — defaults are <em>Max pcap bytes = 32&nbsp;MiB</em>, all other limits unbounded. The live
+              table only mounts the most recent ~500 rows for performance; older packets stay in the saved
+              <code>.pcap</code> and the in-page summary. Click any decoded row to expand its layered breakdown
+              (Ethernet / IPv4 / IPv6 / TCP / UDP / DNS / TLS / HTTP).
+            </p>
+          </details>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-pcap" data-needs="dev,auth"
+              title="StartService(com.apple.pcapd) → secondary TLS → libpcap stream + per-packet decoder">
+              <span class="spinner" aria-hidden="true"></span><span>Capture network</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="btn-pcap-stop" disabled>Stop</button>
+            <button type="button" class="btn btn-ghost" id="btn-pcap-save" disabled title="Download the libpcap (.pcap) file we built so far">Save .pcap</button>
+            <button type="button" class="btn btn-ghost" id="btn-pcap-clear" disabled>Clear</button>
+          </div>
+          <div id="pcap-area" class="ac-result" hidden>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
+              <h4 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live packets</h4>
+              <span class="hint" id="pcap-status" style="margin:0;"></span>
+            </div>
+            <div id="pcap-summary" class="pcap-summary" data-state="idle">
+              <span class="live-dot" aria-hidden="true"></span>
+            </div>
+            <div id="pcap-banner" class="pcap-banner" hidden>
+              <span class="b-title" id="pcap-banner-title">Capture finished</span>
+              <span class="b-msg" id="pcap-banner-msg"></span>
+              <button type="button" class="btn btn-ghost" id="pcap-banner-resume" hidden>Resume capture</button>
+              <button type="button" class="btn btn-ghost" id="pcap-banner-dismiss">Dismiss</button>
+            </div>
+            <div class="pcap-controls">
+              <input type="search" id="pcap-quick-filter"
+                placeholder="Filter visible packets (proto, host, flow, info, comm)…"
+                title="Substring filter applied client-side over the rendered live table; capture and the .pcap export are unaffected." />
+              <button type="button" class="seg-btn" id="pcap-tail-btn" data-on="1"
+                title="Auto-scroll: keep the latest packet in view">Live tail</button>
+              <button type="button" class="seg-btn" id="pcap-decoded-only" data-on="0"
+                title="Only show rows whose protocol the decoder understands (TCP, UDP, DNS, TLS, HTTP, ICMP)">Decoded only</button>
+            </div>
+            <div class="pcap-table-wrap" id="pcap-table-wrap">
+              <table class="pcap-table" id="pcap-table">
+                <thead>
+                  <tr>
+                    <th class="num col-num">#</th>
+                    <th class="col-t">t</th>
+                    <th class="col-dir">dir</th>
+                    <th class="col-iface">iface</th>
+                    <th class="col-proc">process</th>
+                    <th class="col-flow">flow</th>
+                    <th class="col-proto">proto</th>
+                    <th class="num col-len">len</th>
+                    <th class="col-info">info</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+              <div id="pcap-empty" class="pcap-empty">Waiting for the first packet…</div>
+            </div>
           </div>
         </div>
-        <div class="row two-col">
-          <div>
-            <label for="pcap-max-packets">Max packets (0 = unlimited)</label>
-            <input type="text" id="pcap-max-packets" value="500" inputmode="numeric" />
-          </div>
-          <div>
-            <label for="pcap-max-duration">Max duration (s, 0 = unlimited)</label>
-            <input type="text" id="pcap-max-duration" value="60" inputmode="numeric" />
-          </div>
-        </div>
-        <div class="row two-col">
-          <div>
-            <label for="pcap-max-bytes">Max bytes (0 = unlimited)</label>
-            <input type="text" id="pcap-max-bytes" value="4194304" inputmode="numeric" />
-          </div>
-          <div>
-            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="pcap-mirror" /> Mirror packet log to Output</label>
-          </div>
-        </div>
-        <p class="hint">
-          The whole `.pcap` file (libpcap, <code>LINKTYPE_ETHERNET</code>, snaplen 65535) is held in
-          memory — keep <em>Max bytes</em> reasonable (4&nbsp;MiB default). Like syslog, reads block
-          on WebUSB until the device sends data; lock/unlock or open an app to flush.
-        </p>
-        <div class="btn-row">
-          <button type="button" class="btn" id="btn-pcap" data-needs="dev,auth"
-            title="StartService(com.apple.pcapd) → secondary TLS → libpcap stream">
-            <span class="spinner" aria-hidden="true"></span><span>Capture network</span>
-          </button>
-          <button type="button" class="btn btn-ghost" id="btn-pcap-stop" disabled>Stop</button>
-          <button type="button" class="btn btn-ghost" id="btn-pcap-save" disabled title="Download the libpcap (.pcap) file we built so far">Save .pcap</button>
-          <button type="button" class="btn btn-ghost" id="btn-pcap-clear" disabled>Clear</button>
-        </div>
-        <div id="pcap-area" hidden style="margin-top:0.4rem;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
-            <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0;">Live packets</h2>
-            <span class="hint" id="pcap-status" style="margin:0;"></span>
-          </div>
-          <pre id="pcap-out"></pre>
-        </div>
-      </details>
+      </div>
 
-      <details class="toggle-block">
-        <summary>Crash reports (crashreportmover + AFC)</summary>
-        <div class="row two-col">
-          <div>
-            <label for="crash-filter">Name filter (substring)</label>
-            <input type="search" id="crash-filter" placeholder="e.g. JetsamEvent or stacks (empty = all)" />
+      <!-- Crash reports -->
+      <div class="action-card" id="card-crash" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2 2 21h20L12 2z"/><path d="M12 9v6"/><circle cx="12" cy="18" r="0.6" fill="currentColor"/></svg>
           </div>
-          <div>
-            <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="crash-keep" checked /> Keep on device after copy</label>
+          <div class="ac-title">
+            <h3>Crash reports</h3>
+            <div class="ac-sub"><code>crashreportmover</code> + AFC <code>crashreportcopymobile</code> · per-file table with Save / Save all</div>
+          </div>
+          <span class="ac-pill" id="card-crash-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <details class="toggle-block">
+            <summary>Copy options</summary>
+            <div class="row two-col">
+              <div>
+                <label for="crash-filter">Name filter (substring)</label>
+                <input type="search" id="crash-filter" placeholder="e.g. JetsamEvent or stacks (empty = all)" />
+              </div>
+              <div>
+                <label class="inline" style="margin-top:1.4rem"><input type="checkbox" id="crash-keep" checked /> Keep on device after copy</label>
+              </div>
+            </div>
+            <p class="hint">Files are streamed into memory (cap ~32&nbsp;MiB). On success a per-file table appears below the log with Save buttons.</p>
+          </details>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-crash" data-needs="dev,auth">
+              <span class="spinner" aria-hidden="true"></span><span>Copy crash reports</span>
+            </button>
           </div>
         </div>
-        <p class="hint">Files are streamed into memory (cap ~32&nbsp;MiB). On success a per-file table appears below the log with Save buttons.</p>
-        <div class="btn-row">
-          <button type="button" class="btn" id="btn-crash" data-needs="dev,auth">
-            <span class="spinner" aria-hidden="true"></span><span>Copy crash reports</span>
-          </button>
-        </div>
-      </details>
+      </div>
     </section>
 
     <!-- Output / log -->
@@ -731,6 +1141,28 @@
       lockdownScreenshot,
       lockdownPcap,
     } from "./pkg/idevice_wasm.js";
+
+    /* -----------------------------
+     * Optional: dns-packet for proper DNS dissection (name compression, AAAA, CNAME chains, …).
+     * Lazy-loaded from a CDN so the rest of the page works offline; on failure we fall back to a
+     * lightweight inline DNS parser (qname only) which still surfaces the question name.
+     * ----------------------------- */
+    let dnsPacketLib = null;
+    let dnsPacketLibLoading = null;
+    function ensureDnsPacketLib() {
+      if (dnsPacketLib) return Promise.resolve(dnsPacketLib);
+      if (dnsPacketLibLoading) return dnsPacketLibLoading;
+      dnsPacketLibLoading = import("https://esm.sh/dns-packet@5.6.1?bundle")
+        .then((m) => { dnsPacketLib = m.default || m; return dnsPacketLib; })
+        .catch((e) => {
+          console.warn("[idevice-wasm] dns-packet load failed, using fallback:", e);
+          dnsPacketLib = { __fallback: true };
+          return dnsPacketLib;
+        });
+      return dnsPacketLibLoading;
+    }
+    // Prefetch in the background so the first DNS packet can be decoded with the real library.
+    ensureDnsPacketLib();
 
     /* -----------------------------
      * State
@@ -1287,10 +1719,65 @@
      * Boot
      * ----------------------------- */
     setOutput("");
+    /**
+     * Surface a clear, actionable error when the page is loaded outside of a WebUSB-capable
+     * environment (file://, Firefox/Safari, hardened policy…) instead of letting the user
+     * find out via an opaque WASM crash on the first "Pick device" click.
+     */
+    function diagnoseWebUsbAvailability() {
+      try {
+        if (typeof navigator === "undefined") return "no `navigator` global (running outside a browser?)";
+        if (window.isSecureContext === false) {
+          return "this page must be served from a secure context — use https:// or http://localhost. " +
+            "file:// and plain http:// over LAN are blocked by the browser. " +
+            "Run `bash scripts/serve.sh` (or `cd web && python3 -m http.server 8080`) and open http://localhost:8080.";
+        }
+        if (!navigator.usb || typeof navigator.usb.requestDevice !== "function") {
+          const ua = (navigator.userAgent || "").toLowerCase();
+          if (ua.includes("firefox")) {
+            return "Firefox does not implement WebUSB. Open this page in Chrome / Edge / Brave / Arc / Opera.";
+          }
+          if (ua.includes("safari") && !ua.includes("chrome") && !ua.includes("chromium")) {
+            return "Safari does not implement WebUSB. Open this page in Chrome / Edge / Brave / Arc / Opera.";
+          }
+          return "`navigator.usb` is missing — likely an enterprise USB policy or extension is blocking it. " +
+            "Try a fresh user profile and `chrome://flags`.";
+        }
+        return null;
+      } catch (e) {
+        return `WebUSB preflight crashed: ${e}`;
+      }
+    }
+    const webUsbProblem = diagnoseWebUsbAvailability();
+    if (webUsbProblem) {
+      const banner = document.createElement("div");
+      banner.className = "pcap-banner danger";
+      banner.style.margin = "0 0 0.85rem";
+      banner.innerHTML =
+        `<span class="b-title">WebUSB unavailable</span>` +
+        `<span class="b-msg">${webUsbProblem.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>` +
+        `<a class="btn btn-ghost" href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API" target="_blank" rel="noopener">Docs</a>`;
+      document.querySelector("main").insertBefore(banner, document.querySelector("main").firstChild);
+      logLine("err", `WebUSB preflight: ${webUsbProblem}`);
+      // Keep the rest of the page loadable for offline pcap inspection / pair-record parsing,
+      // but disable every action that needs an actual device.
+      for (const btn of document.querySelectorAll("button[data-needs]")) {
+        btn.disabled = true;
+        btn.title = "Disabled: WebUSB is not available in this browser/context.";
+      }
+      const pickBtn = document.getElementById("btn-pick");
+      if (pickBtn) {
+        pickBtn.disabled = true;
+        pickBtn.title = "Disabled: WebUSB is not available in this browser/context.";
+      }
+    }
     logLine("info", "Loading WASM…");
     try {
       await init();
-      logLine("ok", "WASM loaded — pick an Apple device to begin.");
+      logLine("ok",
+        webUsbProblem
+          ? "WASM loaded — fix the WebUSB issue above to use device actions."
+          : "WASM loaded — pick an Apple device to begin.");
     } catch (e) {
       logLine("err", "WASM init failed (run ./scripts/build-wasm.sh): " + e);
     }
@@ -1348,8 +1835,26 @@
       });
     });
 
+    /** Same as runBusy but also drives the action card's state pill. */
+    async function runBusyCard(btn, cardId, label, fn) {
+      if (busyBtn) return;
+      setBusy(btn, label + "…");
+      setCardState(cardId, "running", label + "…");
+      logLine("step", `▶ ${label}`);
+      try {
+        await fn();
+        logLine("ok", `✓ ${label} done`);
+        clearBusy(btn, true, `${label} ✓`);
+        setCardState(cardId, "ok", `${label} ✓`);
+      } catch (e) {
+        logLine("err", `✗ ${label}: ${e}`);
+        clearBusy(btn, false, `${label} ✗`);
+        setCardState(cardId, "err", "Failed");
+      }
+    }
+
     $("btn-bat").addEventListener("click", (ev) =>
-      runBusy(ev.currentTarget, "Battery", async () => {
+      runBusyCard(ev.currentTarget, "card-lockdown", "Battery", async () => {
         const r = await lockdownBattery(
           dev, pairMode(), hostId(), systemBuid(), verbose(),
           plistXmlText ?? "", tlsClientAuth(), tlsSni()
@@ -1359,7 +1864,7 @@
     );
 
     $("btn-diag").addEventListener("click", (ev) =>
-      runBusy(ev.currentTarget, "Diagnostics", async () => {
+      runBusyCard(ev.currentTarget, "card-lockdown", "Diagnostics", async () => {
         const r = await lockdownDiagnostics(
           dev, pairMode(), hostId(), systemBuid(), verbose(),
           plistXmlText ?? "", tlsClientAuth(), tlsSni()
@@ -1370,7 +1875,7 @@
     );
 
     $("btn-plist-fetch").addEventListener("click", (ev) =>
-      runBusy(ev.currentTarget, "Fetch with plist", async () => {
+      runBusyCard(ev.currentTarget, "card-lockdown", "Fetch with plist", async () => {
         if (!plistXmlText) throw new Error("No pair record loaded");
         const r = await lockdownFetchWithPlistXml(
           dev, plistXmlText, verbose(), tlsClientAuth(), tlsSni()
@@ -1420,6 +1925,7 @@
       $("screenshot-area").hidden = false;
       $("screenshot-status").textContent = "capturing…";
       setBusy(btn, "Screenshot…");
+      setCardState("card-screenshot", "running", "Capturing");
       logLine("step", "▶ Take screenshot (com.apple.mobile.screenshotr)");
       try {
         const res = await lockdownScreenshot(
@@ -1444,10 +1950,12 @@
         logLine("ok",
           `✓ Screenshot ${fmtBytes(res.byteLength | 0)} (${res.extension}/${res.mime})`);
         clearBusy(btn, true, `Screenshot ✓ (${res.extension})`);
+        setCardState("card-screenshot", "ok", `${res.extension.toUpperCase()} · ${fmtBytes(res.byteLength | 0)}`);
       } catch (e) {
         $("screenshot-status").textContent = `error: ${e}`;
         logLine("err", `✗ Screenshot: ${e}`);
         clearBusy(btn, false, "Screenshot ✗");
+        setCardState("card-screenshot", "err", "Failed");
       }
     });
 
@@ -1541,6 +2049,7 @@
       $("btn-syslog-clear").disabled = true;
       $("btn-syslog-save").disabled = true;
       setBusy(btn, "Syslog…");
+      setCardState("card-syslog", "running", "Streaming");
       logLine("step", `▶ Stream syslog${filter ? ` (filter="${filter}")` : ""}${maxDur ? ` · ${maxDur}s` : ""}${maxBytes ? ` · ${fmtBytes(maxBytes)}` : ""}`);
 
       const onChunk = (text, totalBytes) => {
@@ -1591,11 +2100,13 @@
         $("syslog-status").textContent = syslogStatusText(`stopped (${reason}, ${sslLabel})`);
         logLine("ok", `✓ Syslog stopped — ${reason} · ${fmtBytes(syslogState.bytes)} · ${sslLabel}`);
         clearBusy(btn, true, `Syslog ✓ (${reason})`);
+        setCardState("card-syslog", "ok", `Stopped: ${reason}`);
       } catch (e) {
         syslogFlushPending();
         $("syslog-status").textContent = syslogStatusText(`error: ${e}`);
         logLine("err", `✗ Syslog: ${e}`);
         clearBusy(btn, false, "Syslog ✗");
+        setCardState("card-syslog", "err", "Failed");
       } finally {
         syslogState.running = false;
         $("btn-syslog-stop").disabled = true;
@@ -1603,52 +2114,806 @@
       }
     });
 
-    /* ---------- pcap (com.apple.pcapd) -------------------------------- */
+    /* -----------------------------
+     * Action card status pill helper. Each .action-card has a [data-state] attribute and a
+     * span#card-<id>-pill that we update on idle/running/ok/err. Keeps the visual feedback
+     * consistent across Lockdown queries / Screenshot / Syslog / Pcap / Crash reports.
+     * ----------------------------- */
+    function setCardState(cardId, state, pillText) {
+      const card = $(cardId);
+      const pill = $(`${cardId}-pill`);
+      if (!card || !pill) return;
+      card.dataset.state = state;
+      pill.textContent = pillText || ({
+        idle: "Idle", running: "Running…", ok: "Ready", err: "Error",
+      })[state] || state;
+    }
+
+    /* =====================================================================
+     * Browser-side packet decoder for the pcap stream
+     *
+     * We re-parse the raw Ethernet frame the WASM layer hands us (after it
+     * synthesised the fake Ethernet header for cellular `pdp_ip*` packets)
+     * and surface a layered view: Ethernet → IPv4/IPv6 → TCP/UDP/ICMP →
+     * (DNS via `dns-packet`, TLS ClientHello SNI, HTTP request line).
+     * Everything is pure JS so it runs without a backend.
+     * ===================================================================== */
+    const ETHERTYPE_IPV4 = 0x0800, ETHERTYPE_IPV6 = 0x86dd, ETHERTYPE_ARP = 0x0806;
+    const IPPROTO_ICMP = 1, IPPROTO_TCP = 6, IPPROTO_UDP = 17, IPPROTO_ICMPV6 = 58;
+
+    function ipv4Str(b, off) {
+      return `${b[off]}.${b[off + 1]}.${b[off + 2]}.${b[off + 3]}`;
+    }
+    function ipv6Str(b, off) {
+      const parts = [];
+      for (let i = 0; i < 16; i += 2) {
+        parts.push(((b[off + i] << 8) | b[off + i + 1]).toString(16));
+      }
+      // Compress longest run of zero groups (RFC 5952 best-effort).
+      let bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i] === "0") {
+          if (curStart === -1) { curStart = i; curLen = 1; } else curLen++;
+          if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+        } else {
+          curStart = -1; curLen = 0;
+        }
+      }
+      if (bestLen >= 2) {
+        const left = parts.slice(0, bestStart).join(":");
+        const right = parts.slice(bestStart + bestLen).join(":");
+        return `${left}::${right}`;
+      }
+      return parts.join(":");
+    }
+    function macStr(b, off) {
+      return Array.from({ length: 6 }, (_, i) => b[off + i].toString(16).padStart(2, "0")).join(":");
+    }
+    function tcpFlags(byte) {
+      const flags = [];
+      if (byte & 0x01) flags.push("FIN");
+      if (byte & 0x02) flags.push("SYN");
+      if (byte & 0x04) flags.push("RST");
+      if (byte & 0x08) flags.push("PSH");
+      if (byte & 0x10) flags.push("ACK");
+      if (byte & 0x20) flags.push("URG");
+      if (byte & 0x40) flags.push("ECE");
+      if (byte & 0x80) flags.push("CWR");
+      return flags;
+    }
+    /** Parse one Ethernet frame and return a layered breakdown plus a top-level summary. */
+    function decodeEthernetFrame(bytes) {
+      const layers = [];
+      const summary = { proto: "OTHER", src: "", dst: "", info: "" };
+      if (!bytes || bytes.length < 14) {
+        return { layers: [], summary: { ...summary, info: "(short frame)" } };
+      }
+      const dst = macStr(bytes, 0), src = macStr(bytes, 6);
+      const etype = (bytes[12] << 8) | bytes[13];
+      layers.push({
+        title: "Ethernet II",
+        kv: {
+          "Source MAC": src,
+          "Destination MAC": dst,
+          "EtherType": `0x${etype.toString(16).padStart(4, "0")} (${etypeName(etype)})`,
+        },
+      });
+
+      let off = 14;
+      if (etype === ETHERTYPE_IPV4) {
+        return decodeIPv4(bytes, off, layers, summary);
+      }
+      if (etype === ETHERTYPE_IPV6) {
+        return decodeIPv6(bytes, off, layers, summary);
+      }
+      if (etype === ETHERTYPE_ARP) {
+        summary.proto = "ARP";
+        summary.info = "ARP";
+        layers.push({ title: "ARP", kv: { "Length": bytes.length - off } });
+        return { layers, summary };
+      }
+      summary.proto = "OTHER";
+      summary.info = `EtherType 0x${etype.toString(16).padStart(4, "0")}`;
+      return { layers, summary };
+    }
+    function etypeName(t) {
+      return ({
+        [ETHERTYPE_IPV4]: "IPv4",
+        [ETHERTYPE_IPV6]: "IPv6",
+        [ETHERTYPE_ARP]: "ARP",
+      })[t] || "?";
+    }
+    function decodeIPv4(bytes, off, layers, summary) {
+      if (bytes.length - off < 20) {
+        summary.info = "(short IPv4)";
+        return { layers, summary };
+      }
+      const verIhl = bytes[off];
+      const ihl = (verIhl & 0x0f) * 4;
+      const dscp = bytes[off + 1];
+      const totalLen = (bytes[off + 2] << 8) | bytes[off + 3];
+      const ident = (bytes[off + 4] << 8) | bytes[off + 5];
+      const flagsFrag = (bytes[off + 6] << 8) | bytes[off + 7];
+      const ttl = bytes[off + 8];
+      const proto = bytes[off + 9];
+      const src = ipv4Str(bytes, off + 12);
+      const dst = ipv4Str(bytes, off + 16);
+      summary.src = src; summary.dst = dst;
+      layers.push({
+        title: "IPv4",
+        kv: {
+          "Version / IHL": `4 / ${ihl} bytes`,
+          "DSCP / ECN": `0x${dscp.toString(16).padStart(2, "0")}`,
+          "Total Length": `${totalLen} B`,
+          "TTL": ttl,
+          "Protocol": `${proto} (${ipProtoName(proto)})`,
+          "Source": src,
+          "Destination": dst,
+          "Identification": `0x${ident.toString(16).padStart(4, "0")}`,
+          "Flags / Fragment": `0x${flagsFrag.toString(16).padStart(4, "0")}`,
+        },
+      });
+      const next = off + ihl;
+      return decodeL4(bytes, next, proto, layers, summary, src, dst, /*ipv6*/ false);
+    }
+    function decodeIPv6(bytes, off, layers, summary) {
+      if (bytes.length - off < 40) {
+        summary.info = "(short IPv6)";
+        return { layers, summary };
+      }
+      const verTcFl = (bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3];
+      const payloadLen = (bytes[off + 4] << 8) | bytes[off + 5];
+      const next = bytes[off + 6];
+      const hopLimit = bytes[off + 7];
+      const src = ipv6Str(bytes, off + 8);
+      const dst = ipv6Str(bytes, off + 24);
+      summary.src = src; summary.dst = dst;
+      layers.push({
+        title: "IPv6",
+        kv: {
+          "Version / TC / FlowLabel": `0x${verTcFl.toString(16).padStart(8, "0")}`,
+          "Payload Length": `${payloadLen} B`,
+          "Next Header": `${next} (${ipProtoName(next)})`,
+          "Hop Limit": hopLimit,
+          "Source": src,
+          "Destination": dst,
+        },
+      });
+      return decodeL4(bytes, off + 40, next, layers, summary, src, dst, /*ipv6*/ true);
+    }
+    function ipProtoName(p) {
+      return ({
+        [IPPROTO_ICMP]: "ICMP",
+        [IPPROTO_TCP]: "TCP",
+        [IPPROTO_UDP]: "UDP",
+        [IPPROTO_ICMPV6]: "ICMPv6",
+      })[p] || `proto=${p}`;
+    }
+    function decodeL4(bytes, off, proto, layers, summary, src, dst, isV6) {
+      if (proto === IPPROTO_TCP) return decodeTCP(bytes, off, layers, summary, src, dst);
+      if (proto === IPPROTO_UDP) return decodeUDP(bytes, off, layers, summary, src, dst);
+      if (proto === IPPROTO_ICMP || proto === IPPROTO_ICMPV6) {
+        const t = bytes[off], c = bytes[off + 1];
+        layers.push({
+          title: isV6 ? "ICMPv6" : "ICMP",
+          kv: { "Type": t, "Code": c, "Length": bytes.length - off },
+        });
+        summary.proto = isV6 ? "ICMP6" : "ICMP";
+        summary.info = `${summary.proto} type=${t} code=${c}`;
+        return { layers, summary };
+      }
+      summary.proto = ipProtoName(proto);
+      summary.info = `${src} → ${dst} (${ipProtoName(proto)})`;
+      return { layers, summary };
+    }
+    function decodeTCP(bytes, off, layers, summary, src, dst) {
+      if (bytes.length - off < 20) {
+        summary.proto = "TCP"; summary.info = "(short TCP)";
+        return { layers, summary };
+      }
+      const sport = (bytes[off] << 8) | bytes[off + 1];
+      const dport = (bytes[off + 2] << 8) | bytes[off + 3];
+      const seq = ((bytes[off + 4] << 24) | (bytes[off + 5] << 16) | (bytes[off + 6] << 8) | bytes[off + 7]) >>> 0;
+      const ack = ((bytes[off + 8] << 24) | (bytes[off + 9] << 16) | (bytes[off + 10] << 8) | bytes[off + 11]) >>> 0;
+      const dataOff = ((bytes[off + 12] >> 4) & 0x0f) * 4;
+      const flags = tcpFlags(bytes[off + 13]);
+      const win = (bytes[off + 14] << 8) | bytes[off + 15];
+      summary.src = `${src}:${sport}`; summary.dst = `${dst}:${dport}`;
+      summary.proto = "TCP";
+      const payloadOff = off + dataOff;
+      const payloadLen = Math.max(0, bytes.length - payloadOff);
+      layers.push({
+        title: "TCP",
+        kv: {
+          "Source Port": sport,
+          "Destination Port": dport,
+          "Flags": flags.length ? flags.join("|") : "(none)",
+          "Sequence": seq,
+          "Acknowledgement": ack,
+          "Window": win,
+          "Header Length": `${dataOff} B`,
+          "Payload": `${payloadLen} B`,
+        },
+      });
+      summary.info = `${flags.length ? flags.join(",") : "—"} seq=${seq} ack=${ack} win=${win} len=${payloadLen}`;
+      // App-layer hints: TLS, HTTP.
+      if (payloadLen > 0) {
+        const payload = bytes.subarray(payloadOff, payloadOff + payloadLen);
+        if (payload[0] === 0x16 /* TLS handshake */) {
+          const sni = parseTlsSni(payload);
+          if (sni) {
+            summary.proto = "TLS";
+            summary.info = `ClientHello SNI=${sni}` + (dport === 443 ? "" : ` (dport ${dport})`);
+            layers.push({ title: "TLS", kv: { "Record": "Handshake (0x16)", "ClientHello SNI": sni } });
+          } else if (dport === 443 || sport === 443) {
+            summary.proto = "HTTPS";
+            summary.info = `${flags.join(",") || "—"} TLS record (0x${payload[0].toString(16).padStart(2, "0")})`;
+          }
+        } else if (payload[0] === 0x17) {
+          summary.proto = "TLS";
+          summary.info = `Application Data (len=${payloadLen})`;
+        } else {
+          const httpHint = sniffHttpRequest(payload);
+          if (httpHint) {
+            summary.proto = "HTTP";
+            summary.info = httpHint;
+            layers.push({ title: "HTTP", kv: { "Request line": httpHint } });
+          }
+        }
+      }
+      return { layers, summary };
+    }
+    function decodeUDP(bytes, off, layers, summary, src, dst) {
+      if (bytes.length - off < 8) {
+        summary.proto = "UDP"; summary.info = "(short UDP)";
+        return { layers, summary };
+      }
+      const sport = (bytes[off] << 8) | bytes[off + 1];
+      const dport = (bytes[off + 2] << 8) | bytes[off + 3];
+      const len = (bytes[off + 4] << 8) | bytes[off + 5];
+      summary.src = `${src}:${sport}`; summary.dst = `${dst}:${dport}`;
+      summary.proto = "UDP";
+      summary.info = `len=${len}`;
+      layers.push({
+        title: "UDP",
+        kv: { "Source Port": sport, "Destination Port": dport, "Length": `${len} B` },
+      });
+      const payload = bytes.subarray(off + 8);
+      if (sport === 53 || dport === 53 || sport === 5353 || dport === 5353) {
+        const dnsLayer = decodeDns(payload);
+        if (dnsLayer) {
+          summary.proto = "DNS";
+          summary.info = dnsLayer.shortInfo;
+          layers.push(dnsLayer.layer);
+        }
+      } else if (dport === 443 || sport === 443) {
+        // QUIC carries TLS-1.3 ClientHello inside long-header packets; surface a hint.
+        summary.proto = "QUIC?";
+        summary.info = `UDP/443 len=${len} (likely QUIC)`;
+      }
+      return { layers, summary };
+    }
+    /** Tiny DNS dissector that uses dns-packet when available, falling back to qname-only. */
+    function decodeDns(payload) {
+      try {
+        if (dnsPacketLib && !dnsPacketLib.__fallback) {
+          const decoded = dnsPacketLib.decode(payload);
+          const q = (decoded.questions || []).map((qq) => `${qq.type} ${qq.name}`).join(", ");
+          const a = (decoded.answers || []).map((aa) =>
+            `${aa.type} ${aa.name}${aa.data ? "→" + (typeof aa.data === "string" ? aa.data : JSON.stringify(aa.data)) : ""}`
+          ).join("; ");
+          const id = decoded.id != null ? `0x${decoded.id.toString(16).padStart(4, "0")}` : "?";
+          const opcode = decoded.opcode || "QUERY";
+          const rcode = decoded.rcode || "NOERROR";
+          const isResp = decoded.type === "response";
+          const shortInfo = isResp
+            ? `DNS resp ${rcode} ${a || q}`
+            : `DNS query ${opcode} ${q}`;
+          return {
+            shortInfo,
+            layer: {
+              title: "DNS",
+              kv: {
+                "Transaction ID": id,
+                "Type": decoded.type || "?",
+                "Opcode": opcode,
+                "RCode": rcode,
+                "Questions": q || "(none)",
+                "Answers": a || "(none)",
+                "Authorities": (decoded.authorities || []).length,
+                "Additionals": (decoded.additionals || []).length,
+              },
+            },
+          };
+        }
+      } catch (e) {
+        // Fall through to qname-only fallback.
+      }
+      return decodeDnsFallback(payload);
+    }
+    /** ~30-line DNS qname extractor (no answers, just first question). Used when dns-packet is unavailable. */
+    function decodeDnsFallback(payload) {
+      if (payload.length < 12) return null;
+      const id = (payload[0] << 8) | payload[1];
+      const flags = (payload[2] << 8) | payload[3];
+      const qd = (payload[4] << 8) | payload[5];
+      let p = 12;
+      const labels = [];
+      let safety = 64;
+      while (p < payload.length && safety--) {
+        const len = payload[p];
+        if (len === 0) break;
+        if ((len & 0xc0) === 0xc0) {
+          // Pointer — for simplicity in fallback, stop expansion here.
+          labels.push("…");
+          break;
+        }
+        if (p + 1 + len > payload.length) return null;
+        labels.push(new TextDecoder("utf-8").decode(payload.subarray(p + 1, p + 1 + len)));
+        p += 1 + len;
+      }
+      const qname = labels.join(".") || "(empty)";
+      const isResp = (flags & 0x8000) !== 0;
+      return {
+        shortInfo: `DNS ${isResp ? "resp" : "query"} ${qname}` + (qd > 1 ? ` (+${qd - 1} more)` : ""),
+        layer: {
+          title: "DNS (fallback)",
+          kv: {
+            "Transaction ID": `0x${id.toString(16).padStart(4, "0")}`,
+            "Flags": `0x${flags.toString(16).padStart(4, "0")}`,
+            "Questions": qd,
+            "First QName": qname,
+          },
+        },
+      };
+    }
+    /** Pull the SNI string out of a TLS ClientHello record. Returns null if not a CH or SNI absent. */
+    function parseTlsSni(rec) {
+      try {
+        if (rec.length < 5 || rec[0] !== 0x16) return null;
+        const recLen = (rec[3] << 8) | rec[4];
+        if (rec.length < 5 + recLen) return null;
+        const handshake = rec.subarray(5, 5 + recLen);
+        if (handshake.length < 4 || handshake[0] !== 0x01 /* ClientHello */) return null;
+        let p = 4 /* type+len(3) */ + 2 /* version */ + 32 /* random */;
+        if (p > handshake.length) return null;
+        const sidLen = handshake[p]; p += 1 + sidLen;
+        if (p + 2 > handshake.length) return null;
+        const csLen = (handshake[p] << 8) | handshake[p + 1]; p += 2 + csLen;
+        if (p + 1 > handshake.length) return null;
+        const cmLen = handshake[p]; p += 1 + cmLen;
+        if (p + 2 > handshake.length) return null;
+        const extLen = (handshake[p] << 8) | handshake[p + 1]; p += 2;
+        const extEnd = Math.min(p + extLen, handshake.length);
+        while (p + 4 <= extEnd) {
+          const extType = (handshake[p] << 8) | handshake[p + 1];
+          const extDataLen = (handshake[p + 2] << 8) | handshake[p + 3];
+          const extData = handshake.subarray(p + 4, p + 4 + extDataLen);
+          p += 4 + extDataLen;
+          if (extType === 0x00 /* server_name */ && extData.length >= 5) {
+            // server_name_list_length(2) | name_type(1) | host_name_length(2) | host_name(...)
+            const nameType = extData[2];
+            if (nameType === 0) {
+              const hnLen = (extData[3] << 8) | extData[4];
+              if (extData.length >= 5 + hnLen) {
+                return new TextDecoder("utf-8").decode(extData.subarray(5, 5 + hnLen));
+              }
+            }
+          }
+        }
+      } catch { /* swallow malformed TLS records */ }
+      return null;
+    }
+    /** Detect a plain HTTP/1.x request line in the first ~64 bytes of a TCP payload. */
+    function sniffHttpRequest(payload) {
+      const peek = payload.subarray(0, Math.min(payload.length, 256));
+      let s = "";
+      for (let i = 0; i < peek.length; i++) {
+        const c = peek[i];
+        if (c === 0x0d || c === 0x0a) break;
+        if (c < 0x20 || c > 0x7e) return null;
+        s += String.fromCharCode(c);
+        if (s.length > 200) return null;
+      }
+      const m = /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s+(\S+)\s+HTTP\/\d/.exec(s);
+      return m ? `${m[1]} ${m[2]}` : null;
+    }
+    /** Compact 16-bytes-per-line hex+ASCII dump suitable for the inspector. */
+    function hexDump(bytes, max = 256) {
+      const slice = bytes.subarray(0, Math.min(bytes.length, max));
+      const lines = [];
+      for (let i = 0; i < slice.length; i += 16) {
+        const row = slice.subarray(i, Math.min(slice.length, i + 16));
+        const hex = Array.from(row, (b) => b.toString(16).padStart(2, "0")).join(" ");
+        const asc = Array.from(row, (b) => (b >= 0x20 && b <= 0x7e) ? String.fromCharCode(b) : ".").join("");
+        lines.push(`${i.toString(16).padStart(4, "0")}  ${hex.padEnd(48, " ")}  ${asc}`);
+      }
+      if (bytes.length > max) lines.push(`… (+${bytes.length - max} more bytes)`);
+      return lines.join("\n");
+    }
+
+    /* ---------- pcap (com.apple.pcapd) --------------------------------
+     *
+     *   Architecture (as of the rAF rewrite)
+     *   ────────────────────────────────────
+     *   onPacket  ──► pcapState.allPackets[]            (lightweight record, no DOM)
+     *                 pcapState.pendingPackets[]        (FIFO of un-rendered records)
+     *                 ↳ schedules a single rAF to flushVisible(); returns immediately so the
+     *                   WASM relay loop is never blocked by DOM work.
+     *   flushVisible ─► builds <tr> elements in capped batches, appends to <tbody>, evicts
+     *                   the oldest visible rows above PCAP_MAX_VISIBLE so layout cost stays
+     *                   bounded no matter how long the capture runs.
+     *   1Hz tick   ─► refreshes the summary chips so the user sees "alive" / "stalled"
+     *                 without piling DOM work on every callback.
+     *
+     *   Why this matters
+     *   ────────────────
+     *   With the previous "render every packet inline" design, after a few thousand high-rate
+     *   packets every callback paid a layout cost proportional to the table size, which
+     *   eventually starved the message pump and the live pane *appeared* to stop. The relay
+     *   loop is otherwise healthy (the CLI captured 3500+ pkts without hiccup in our run).
+     */
+    /** Cap of <tr> pairs (row + detail) mounted at any time. */
+    const PCAP_MAX_VISIBLE   = 500;
+    /** Cap of un-rendered packets buffered between rAF flushes. Older are dropped from view. */
+    const PCAP_MAX_PENDING   = 4000;
+    /** Hard cap on the in-memory packet store (still doesn't affect the libpcap blob). */
+    const PCAP_MAX_KEPT      = 25000;
+    /** Max <tr>s emitted in a single rAF tick — keeps every frame snappy. */
+    const PCAP_RENDER_BUDGET = 80;
+
     let pcapState = {
       running: false,
       stopRequested: false,
       packets: 0,
       blob: null,
       startedAt: 0,
-      pendingHtml: "",
-      lastFlushAt: 0,
       mirrorToLog: false,
+      decode: true,
+      protoCounts: {},
+      filterProc: "",
+      filterIface: "",
+      allPackets: [],     // raw lightweight records (survive DOM eviction)
+      pendingPackets: [], // not-yet-rendered, oldest first
+      visiblePairs: [],   // {row, detail} <tr>s currently mounted, oldest first
+      flushRaf: 0,        // requestAnimationFrame id (0 = idle)
+      lastPacketAt: 0,    // wall-clock of last packet — drives the "stalled?" indicator
+      quickFilter: "",    // user-typed substring filter (proto/flow/info/comm)
+      autoTail: true,
+      decodedOnly: false,
+      statusTick: 0,
     };
+    const pcapTbody = $("pcap-table").querySelector("tbody");
+    const pcapWrap  = $("pcap-table-wrap");
+
     function pcapReset() {
-      $("pcap-out").textContent = "";
+      pcapTbody.innerHTML = "";
       $("pcap-status").textContent = "";
+      $("pcap-empty").style.display = "";
+      $("pcap-empty").textContent = "Waiting for the first packet…";
+      $("pcap-banner").hidden = true;
       $("pcap-area").hidden = true;
       $("btn-pcap-save").disabled = true;
       $("btn-pcap-clear").disabled = true;
       pcapState.packets = 0;
       pcapState.blob = null;
-      pcapState.pendingHtml = "";
-    }
-    function pcapFlushPending() {
-      if (!pcapState.pendingHtml) return;
-      const out = $("pcap-out");
-      out.insertAdjacentHTML("beforeend", pcapState.pendingHtml);
-      pcapState.pendingHtml = "";
-      // Trim runaway DOM: keep at most ~2000 trailing lines so the page stays responsive.
-      const MAX_LINES = 2000;
-      const txt = out.textContent;
-      const newlineCount = (txt.match(/\n/g) || []).length;
-      if (newlineCount > MAX_LINES) {
-        const lines = txt.split(/\n/);
-        out.textContent = lines.slice(lines.length - MAX_LINES).join("\n");
+      pcapState.protoCounts = {};
+      pcapState.allPackets = [];
+      pcapState.pendingPackets = [];
+      pcapState.visiblePairs = [];
+      pcapState.lastPacketAt = 0;
+      if (pcapState.flushRaf) {
+        cancelAnimationFrame(pcapState.flushRaf);
+        pcapState.flushRaf = 0;
       }
-      out.scrollTop = out.scrollHeight;
+      if (pcapState.statusTick) {
+        clearInterval(pcapState.statusTick);
+        pcapState.statusTick = 0;
+      }
+      pcapRenderSummary();
     }
+
     function pcapStatusText(extra) {
       const dur = (((Date.now() - pcapState.startedAt) / 1000) || 0).toFixed(1);
       const blobBytes = pcapState.blob ? pcapState.blob.length : 0;
       return `${pcapState.packets} pkts · ${fmtBytes(blobBytes)} · ${dur}s${extra ? " · " + extra : ""}`;
     }
+
     function escHtml(s) {
       return String(s).replace(/[&<>"']/g, (c) => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
       }[c]));
     }
+
+    /** Returns true if `pkt` should appear in the live table given the current quick filter. */
+    function pcapPacketVisible(pkt) {
+      if (pcapState.decodedOnly) {
+        const p = (pkt.proto || "").toUpperCase();
+        if (!/^(TCP|UDP|DNS|TLS|HTTPS|HTTP|ICMP|ICMP6|ARP|QUIC)$/.test(p)) return false;
+      }
+      const q = pcapState.quickFilter;
+      if (!q) return true;
+      const hay = `${pkt.proto} ${pkt.src} ${pkt.dst} ${pkt.info} ${pkt.comm} ${pkt.iface}`;
+      return hay.toLowerCase().includes(q);
+    }
+
+    /** Schedule an idempotent rAF flush of the pending packet queue. */
+    function scheduleFlush() {
+      if (pcapState.flushRaf) return;
+      pcapState.flushRaf = requestAnimationFrame(flushVisible);
+    }
+
+    function flushVisible() {
+      pcapState.flushRaf = 0;
+      if (!pcapState.pendingPackets.length) return;
+      // Drop excess pending so we never spend more than RENDER_BUDGET per frame even after a
+      // long burst. Dropped packets are still in `allPackets[]` and the libpcap export.
+      if (pcapState.pendingPackets.length > PCAP_MAX_PENDING) {
+        const drop = pcapState.pendingPackets.length - PCAP_MAX_PENDING;
+        pcapState.pendingPackets.splice(0, drop);
+      }
+      const budget = Math.min(pcapState.pendingPackets.length, PCAP_RENDER_BUDGET);
+      const batch = pcapState.pendingPackets.splice(0, budget);
+
+      const frag = document.createDocumentFragment();
+      let appended = 0;
+      for (const pkt of batch) {
+        if (!pcapPacketVisible(pkt)) continue;
+        const built = buildPacketRow(pkt);
+        frag.appendChild(built.row);
+        frag.appendChild(built.detail);
+        pcapState.visiblePairs.push(built);
+        appended++;
+      }
+      if (appended) {
+        pcapTbody.appendChild(frag);
+        $("pcap-empty").style.display = "none";
+      }
+      // FIFO evict oldest visible pairs in JS-array space, then a single batch DOM removal.
+      if (pcapState.visiblePairs.length > PCAP_MAX_VISIBLE) {
+        const drop = pcapState.visiblePairs.length - PCAP_MAX_VISIBLE;
+        const evicted = pcapState.visiblePairs.splice(0, drop);
+        for (const pair of evicted) {
+          if (pair.row.parentNode === pcapTbody) pcapTbody.removeChild(pair.row);
+          if (pair.detail.parentNode === pcapTbody) pcapTbody.removeChild(pair.detail);
+        }
+      }
+      if (pcapState.autoTail && appended) pcapWrap.scrollTop = pcapWrap.scrollHeight;
+      // Reschedule if there's still pending work.
+      if (pcapState.pendingPackets.length) scheduleFlush();
+    }
+
+    function pcapRenderSummary() {
+      const entries = Object.entries(pcapState.protoCounts).sort((a, b) => b[1] - a[1]);
+      const root = $("pcap-summary");
+      const dur = (((Date.now() - pcapState.startedAt) / 1000) || 0).toFixed(1);
+      const sinceLast = pcapState.lastPacketAt
+        ? `${((Date.now() - pcapState.lastPacketAt) / 1000).toFixed(1)}s ago`
+        : "—";
+      const bytes = pcapState.blob ? pcapState.blob.length : 0;
+      const filt = pcapState.filterProc || pcapState.filterIface
+        ? ` · filter ${pcapState.filterProc ? `proc=${escHtml(pcapState.filterProc)}` : ""}${pcapState.filterIface ? ` iface=${escHtml(pcapState.filterIface)}` : ""}`
+        : "";
+      const visible = pcapState.visiblePairs.length;
+      const dropped = Math.max(0, pcapState.allPackets.length - visible);
+      let stateClass;
+      if (pcapState.running) {
+        stateClass = (pcapState.lastPacketAt && (Date.now() - pcapState.lastPacketAt) > 5000)
+          ? "stalled" : "running";
+      } else {
+        stateClass = pcapState.allPackets.length ? "ok" : "idle";
+      }
+      root.dataset.state = stateClass;
+      root.innerHTML =
+        `<span class="live-dot" aria-hidden="true"></span>` +
+        `<span class="stat"><span class="lbl">pkts</span>${pcapState.packets}</span>` +
+        `<span class="stat"><span class="lbl">pcap</span>${escHtml(fmtBytes(bytes))}</span>` +
+        `<span class="stat"><span class="lbl">elapsed</span>${dur}s</span>` +
+        `<span class="stat"><span class="lbl">last</span>${sinceLast}</span>` +
+        `<span class="stat"><span class="lbl">visible</span>${visible}${dropped ? `<span class="lbl" style="margin-left:0.35rem">+${dropped} hidden</span>` : ""}</span>` +
+        entries.slice(0, 8).map(([p, n]) =>
+          `<span class="stat"><span class="lbl">${escHtml(p)}</span>${n}</span>`
+        ).join("") +
+        (filt ? `<span class="stat" style="border-color:transparent;background:transparent;color:var(--muted)">${filt}</span>` : "");
+    }
+
+    /** Re-apply the current quick / decoded-only filter to the kept packets — bounded by
+     *  PCAP_MAX_VISIBLE so we don't blow up if someone clears the filter on a 25k-pkt capture. */
+    function pcapReapplyFilter() {
+      pcapTbody.innerHTML = "";
+      pcapState.visiblePairs = [];
+      pcapState.pendingPackets = [];
+      const start = Math.max(0, pcapState.allPackets.length - PCAP_MAX_VISIBLE * 4);
+      pcapState.pendingPackets.push(...pcapState.allPackets.slice(start));
+      $("pcap-empty").style.display = pcapState.pendingPackets.length ? "none" : "";
+      scheduleFlush();
+    }
+
+    /**
+     * Pretty-print the decoder's plain-text info string. Wraps the most "interesting" tokens —
+     * hostnames (SNI / DNS qname), HTTP method + path, TCP flags, key=value pairs — in dedicated
+     * highlight spans so the eye lands on them without having to expand the row.
+     */
+    function highlightInfoHtml(info) {
+      if (!info) return "";
+      const e = escHtml(info);
+
+      // HTTP request line: "GET /path", "POST /v1/foo", …
+      let m = /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s+(\S+)$/.exec(e);
+      if (m) return `<span class="hl-method">${m[1]}</span><span class="hl-path">${m[2]}</span>`;
+
+      // TLS ClientHello SNI=<host> (with optional trailer like " (dport 8443)")
+      m = /^ClientHello\s+SNI=(\S+?)(\s.*)?$/.exec(e);
+      if (m) {
+        const trailer = m[2] ? `<span class="hl-key">${m[2]}</span>` : "";
+        return `<span class="hl-tag">TLS Hello</span>SNI=<span class="hl-host">${m[1]}</span>${trailer}`;
+      }
+      m = /^Application Data \(len=(\d+)\)$/.exec(e);
+      if (m) return `<span class="hl-tag">TLS App</span><span class="hl-key">len=</span><span class="hl-num">${m[1]}</span>`;
+
+      // DNS query / response from dns-packet (or fallback): the question / answer name is the gold.
+      m = /^DNS\s+(query|resp)\s+(.*)$/.exec(e);
+      if (m) {
+        const tag = m[1] === "query"
+          ? `<span class="hl-tag q">DNS Q</span>`
+          : `<span class="hl-tag r">DNS R</span>`;
+        const rest = m[2]
+          .replace(/\b(SERVFAIL|NXDOMAIN|REFUSED|FORMERR|NOTIMP)\b/g,
+            '<span class="hl-rcode-bad">$1</span>')
+          .replace(/\b(A|AAAA|CNAME|MX|TXT|PTR|NS|SOA|HTTPS|SRV)\s+([A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+)/g,
+            '<span class="hl-key">$1</span> <span class="hl-host">$2</span>')
+          .replace(/(→)([0-9a-fA-F:.]+)/g,
+            '<span class="hl-key">$1</span><span class="hl-num">$2</span>');
+        return tag + rest;
+      }
+
+      // TCP: leading flag list (SYN,ACK / PSH,ACK / RST …) + seq/ack/win/len key=val pairs.
+      m = /^([A-Z]{3}(?:,[A-Z]{3})*|—)\s+(.*)$/.exec(e);
+      if (m && /\b(seq|ack)=/.test(m[2])) {
+        const flags = m[1] === "—"
+          ? `<span class="hl-flag">—</span>`
+          : m[1].split(",")
+            .map((f) => `<span class="hl-flag ${f}">${f}</span>`)
+            .join('<span class="hl-key">,</span>');
+        return flags + " " + highlightKvHtml(m[2]);
+      }
+
+      // ICMP, UDP `len=N`, generic `key=val` lists.
+      return highlightKvHtml(e);
+    }
+    function highlightKvHtml(escapedStr) {
+      return escapedStr.replace(
+        /\b(seq|ack|win|len|type|code|opcode|rcode|sport|dport|payload|ihl|ttl|flags)=([^\s,]+)/g,
+        '<span class="hl-key">$1=</span><span class="hl-num">$2</span>'
+      );
+    }
+
+    /** Build the two <tr>s (row + detail pane) for a captured packet record. */
+    function buildPacketRow(pkt) {
+      const evt = pkt.evt, frame = pkt.frame, decoded = pkt.decoded;
+      const tr = document.createElement("tr");
+      tr.className = "pcap-row";
+      const tRel = ((pkt.t - pcapState.startedAt) / 1000).toFixed(2) + "s";
+      const dirCls = (evt.direction === "in" || evt.direction === "out") ? evt.direction : "";
+      const proto = pkt.proto || "OTHER";
+      const protoCls = `proto-${/^[A-Z0-9]+$/.test(proto) ? proto : "other"}`;
+      const flow = pkt.src
+        ? `<span class="src">${escHtml(pkt.src)}</span><span class="arrow">→</span><span class="dst">${escHtml(pkt.dst)}</span>`
+        : `<span class="src">${escHtml(evt.protocolFamily || "?")}</span>`;
+      const infoHtml = decoded
+        ? highlightInfoHtml(pkt.info || "")
+        : "<span class=\"hl-key\">(decoder disabled)</span>";
+      tr.innerHTML =
+        `<td class="num col-num">${evt.index}</td>` +
+        `<td class="col-t">${tRel}</td>` +
+        `<td class="dir col-dir ${dirCls}">${escHtml(evt.direction || "?")}</td>` +
+        `<td class="iface col-iface">${escHtml(evt.interface || "?")}</td>` +
+        `<td class="col-proc">${escHtml(evt.comm || `pid=${evt.pid}`)}</td>` +
+        `<td class="col-flow">${flow}</td>` +
+        `<td class="col-proto"><span class="proto-tag ${protoCls}">${escHtml(proto)}</span></td>` +
+        `<td class="num col-len">${evt.bytes}</td>` +
+        `<td class="info col-info">${infoHtml}</td>`;
+
+      const detail = document.createElement("tr");
+      detail.className = "pcap-detail";
+      const detailTd = document.createElement("td");
+      detailTd.colSpan = 9;
+      detail.appendChild(detailTd);
+
+      tr.addEventListener("click", () => {
+        const wasOpen = tr.classList.contains("expanded");
+        // Close any other expanded row first (single-open inspector).
+        for (const open of pcapTbody.querySelectorAll("tr.pcap-row.expanded")) {
+          open.classList.remove("expanded");
+        }
+        if (!wasOpen) {
+          tr.classList.add("expanded");
+          if (!detailTd.firstChild) {
+            detailTd.appendChild(renderPacketDetailPane(evt, frame, decoded));
+          }
+        }
+      });
+
+      return { row: tr, detail };
+    }
+
+    function renderPacketDetailPane(evt, frame, decoded) {
+      const root = document.createElement("div");
+      root.className = "pcap-detail-pane";
+
+      const meta = document.createElement("div");
+      meta.className = "pcap-layer";
+      meta.innerHTML = `<div class="lt">Capture metadata</div>` +
+        `<div class="kv">` +
+          `<div class="k">Index</div><div class="v">${evt.index}</div>` +
+          `<div class="k">Direction</div><div class="v">${escHtml(evt.direction || "?")}</div>` +
+          `<div class="k">Interface</div><div class="v">${escHtml(evt.interface || "?")} (${escHtml(evt.interfaceType || "?")})</div>` +
+          `<div class="k">Process</div><div class="v">${escHtml(evt.comm || "?")} (pid ${evt.pid})${evt.ecomm ? `, ecomm ${escHtml(evt.ecomm)}` : ""}</div>` +
+          `<div class="k">Family</div><div class="v">${escHtml(evt.protocolFamily || "?")}</div>` +
+          `<div class="k">Frame length</div><div class="v">${evt.bytes} B</div>` +
+        `</div>`;
+      root.appendChild(meta);
+
+      const layers = (decoded && decoded.layers) || [];
+      for (const l of layers) {
+        const div = document.createElement("div");
+        div.className = "pcap-layer";
+        const kv = Object.entries(l.kv).map(
+          ([k, v]) => `<div class="k">${escHtml(k)}</div><div class="v">${escHtml(String(v))}</div>`
+        ).join("");
+        div.innerHTML = `<div class="lt">${escHtml(l.title)}</div><div class="kv">${kv}</div>`;
+        root.appendChild(div);
+      }
+
+      const hex = document.createElement("pre");
+      hex.className = "pcap-hex";
+      hex.textContent = hexDump(frame, 256);
+      root.appendChild(hex);
+
+      return root;
+    }
+
+    /** Inline banner that surfaces *why* a capture finished — explicit limit hit, user stop, or
+     *  device-side close. Includes a one-click "Resume" so users don't have to scroll the form. */
+    function showPcapStopBanner(reason, bytes) {
+      const banner = $("pcap-banner");
+      const titleEl = $("pcap-banner-title");
+      const msgEl   = $("pcap-banner-msg");
+      const resume  = $("pcap-banner-resume");
+      banner.classList.remove("warn", "danger");
+      const human = ({
+        "max-packets":   "Max packets reached.",
+        "max-bytes":     `Max pcap bytes reached (${escHtml(fmtBytes(bytes || 0))}).`,
+        "max-duration":  "Max duration reached.",
+        "user-stop":     "Stopped on demand.",
+        "stream-closed": "Device closed the relay.",
+      })[reason] || `Stopped (${escHtml(reason)}).`;
+      const showResume = (reason === "max-packets" || reason === "max-bytes" || reason === "max-duration");
+      if (reason === "stream-closed") banner.classList.add("warn");
+      titleEl.textContent = "Capture finished";
+      msgEl.innerHTML =
+        `${human} ${pcapState.packets} packets captured, ${escHtml(fmtBytes(bytes || 0))} of pcap. ` +
+        (showResume
+          ? `Bump the matching limit in <strong>Capture options</strong>, or click <strong>Resume</strong> to keep going with the same settings.`
+          : ``);
+      resume.hidden = !showResume;
+      banner.hidden = false;
+    }
+    function showPcapErrorBanner(err) {
+      const banner = $("pcap-banner");
+      banner.classList.remove("warn");
+      banner.classList.add("danger");
+      $("pcap-banner-title").textContent = "Capture failed";
+      $("pcap-banner-msg").textContent = err;
+      $("pcap-banner-resume").hidden = false;
+      banner.hidden = false;
+    }
+    $("pcap-banner-dismiss").addEventListener("click", () => { $("pcap-banner").hidden = true; });
+    $("pcap-banner-resume").addEventListener("click", () => {
+      $("pcap-banner").hidden = true;
+      $("btn-pcap").click();
+    });
+
     $("btn-pcap-stop").addEventListener("click", () => {
       if (pcapState.running) {
         pcapState.stopRequested = true;
@@ -1658,6 +2923,35 @@
     $("btn-pcap-clear").addEventListener("click", () => {
       if (pcapState.running) return;
       pcapReset();
+      setCardState("card-pcap", "idle");
+    });
+    /* Quick filter + live-tail toggles — operate purely on the rendered subset. */
+    $("pcap-quick-filter").addEventListener("input", (ev) => {
+      pcapState.quickFilter = (ev.target.value || "").toLowerCase().trim();
+      pcapReapplyFilter();
+      pcapRenderSummary();
+    });
+    $("pcap-tail-btn").addEventListener("click", () => {
+      pcapState.autoTail = !pcapState.autoTail;
+      $("pcap-tail-btn").dataset.on = pcapState.autoTail ? "1" : "0";
+      if (pcapState.autoTail) pcapWrap.scrollTop = pcapWrap.scrollHeight;
+    });
+    $("pcap-decoded-only").addEventListener("click", () => {
+      pcapState.decodedOnly = !pcapState.decodedOnly;
+      $("pcap-decoded-only").dataset.on = pcapState.decodedOnly ? "1" : "0";
+      pcapReapplyFilter();
+      pcapRenderSummary();
+    });
+    /* If the user scrolls up manually, auto-tail is paused so they can browse history calmly. */
+    pcapWrap.addEventListener("scroll", () => {
+      const atBottom = pcapWrap.scrollTop + pcapWrap.clientHeight + 24 >= pcapWrap.scrollHeight;
+      if (atBottom && !pcapState.autoTail) {
+        pcapState.autoTail = true;
+        $("pcap-tail-btn").dataset.on = "1";
+      } else if (!atBottom && pcapState.autoTail) {
+        pcapState.autoTail = false;
+        $("pcap-tail-btn").dataset.on = "0";
+      }
     });
     $("btn-pcap-save").addEventListener("click", () => {
       if (!pcapState.blob || !pcapState.blob.length) return;
@@ -1668,7 +2962,7 @@
       a.download = `idevice-${stamp}.pcap`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-      logLine("info", `idevice-${stamp}.pcap downloaded (${fmtBytes(pcapState.blob.length)})`);
+      logLine("info", `${a.download} downloaded (${fmtBytes(pcapState.blob.length)})`);
     });
     $("btn-pcap").addEventListener("click", async (ev) => {
       const btn = ev.currentTarget;
@@ -1679,37 +2973,78 @@
       const maxDur = Math.max(0, parseInt($("pcap-max-duration").value || "0", 10) || 0);
       const maxBytes = Math.max(0, parseInt($("pcap-max-bytes").value || "0", 10) || 0);
       const mirror = $("pcap-mirror").checked;
+      const decode = $("pcap-decode").checked;
 
       pcapReset();
       pcapState.running = true;
       pcapState.stopRequested = false;
       pcapState.startedAt = Date.now();
       pcapState.mirrorToLog = mirror;
+      pcapState.decode = decode;
+      pcapState.filterProc = procFilter;
+      pcapState.filterIface = ifaceFilter;
       $("pcap-area").hidden = false;
+      $("pcap-empty").textContent = "Waiting for the first packet…";
       $("btn-pcap-stop").disabled = false;
       $("btn-pcap-clear").disabled = true;
       $("btn-pcap-save").disabled = true;
       setBusy(btn, "Pcap…");
+      setCardState("card-pcap", "running", "Capturing");
+      // 1Hz heartbeat so the summary chips, "last packet", elapsed timer, and stalled-state
+      // dot keep updating even when packet flow pauses.
+      pcapState.statusTick = setInterval(() => {
+        pcapRenderSummary();
+        $("pcap-status").textContent = pcapStatusText();
+      }, 1000);
       logLine("step",
         `▶ Capture network${procFilter ? ` (proc="${procFilter}")` : ""}${ifaceFilter ? ` (iface="${ifaceFilter}")` : ""}`
         + `${maxPkts ? ` · ${maxPkts} pkts` : ""}${maxDur ? ` · ${maxDur}s` : ""}${maxBytes ? ` · ${fmtBytes(maxBytes)}` : ""}`
-      );
+        + ` · decode=${decode ? "on" : "off"}`);
 
+      // The WASM layer hands us the **raw Ethernet frame** directly via `evt.frame` (same bytes
+      // that end up in the final libpcap file). We do as little as possible per packet so the
+      // WASM relay loop never blocks: store a lightweight record, schedule a rAF, return.
       const onPacket = (evt) => {
-        pcapState.packets = evt.index;
-        const line = `#${String(evt.index).padStart(5, " ")}  ${(evt.direction || "?").padStart(3, " ")}  `
-          + `${(evt.interface || "?").padEnd(10, " ")} (${evt.interfaceType || "?"})  `
-          + `${(evt.protocolFamily || "?").padEnd(10, " ")}  pid=${evt.pid}  comm=${evt.comm || ""}  bytes=${evt.bytes}\n`;
-        pcapState.pendingHtml += escHtml(line);
-        const now = performance.now();
-        if (now - pcapState.lastFlushAt > 100) {
-          pcapState.lastFlushAt = now;
-          pcapFlushPending();
+        try {
+          pcapState.packets = evt.index;
+          pcapState.lastPacketAt = Date.now();
+          const frame = evt.frame instanceof Uint8Array ? evt.frame : null;
+          let decoded = null, proto = "OTHER", src = "", dst = "", info = "";
+          if (decode && frame && frame.length) {
+            try {
+              decoded = decodeEthernetFrame(frame);
+              proto = decoded.summary.proto || "OTHER";
+              src = decoded.summary.src; dst = decoded.summary.dst;
+              info = decoded.summary.info;
+            } catch (e) {
+              proto = "ERR";
+              info = `decode error: ${e}`;
+              decoded = { layers: [], summary: { proto, src: "", dst: "", info } };
+            }
+          } else {
+            info = evt.protocolFamily || "";
+          }
+          pcapState.protoCounts[proto] = (pcapState.protoCounts[proto] || 0) + 1;
+          const pkt = { evt, frame, decoded, proto, src, dst, info,
+            comm: evt.comm || "", iface: evt.interface || "", t: pcapState.lastPacketAt };
+          pcapState.allPackets.push(pkt);
+          if (pcapState.allPackets.length > PCAP_MAX_KEPT) {
+            // Drop oldest in-memory packets to bound page memory. Doesn't affect the libpcap blob.
+            pcapState.allPackets.splice(0, pcapState.allPackets.length - PCAP_MAX_KEPT);
+          }
+          pcapState.pendingPackets.push(pkt);
+          scheduleFlush();
+          if (pcapState.mirrorToLog) {
+            const flow = src ? `${src} → ${dst}` : (evt.protocolFamily || "");
+            logLine("info",
+              `[pcap] #${evt.index} ${evt.direction || "?"} ${evt.interface || "?"} ${flow} `
+              + `${proto} ${info} (${evt.bytes} B)`);
+          }
+        } catch (e) {
+          // Swallow per-packet exceptions so a single bad row doesn't kill the relay loop —
+          // the user can still see whatever's already been captured.
+          console.warn("[pcap] onPacket exception:", e);
         }
-        if (pcapState.mirrorToLog) {
-          logLine("info", line.replace(/\n$/, ""));
-        }
-        $("pcap-status").textContent = pcapStatusText();
         return !pcapState.stopRequested;
       };
 
@@ -1722,30 +3057,42 @@
           procFilter, ifaceFilter,
           maxPkts, maxBytes, maxDur * 1000
         );
-        pcapFlushPending();
         if (res && res.data instanceof Uint8Array) {
           pcapState.blob = res.data;
           $("btn-pcap-save").disabled = false;
         }
+        // Drain any leftover pending DOM work so the user sees the final tally immediately.
+        while (pcapState.pendingPackets.length) flushVisible();
+        pcapRenderSummary();
         const reason = (res && res.stoppedReason) || "?";
         const sslLabel = res && res.ssl ? "TLS" : "cleartext";
         $("pcap-status").textContent = pcapStatusText(`stopped (${reason}, ${sslLabel})`);
         logLine("ok", `✓ Pcap stopped — ${reason} · ${pcapState.packets} pkts · ${fmtBytes(res ? res.bytes : 0)} · ${sslLabel}`);
         clearBusy(btn, true, `Pcap ✓ (${reason})`);
+        setCardState("card-pcap", "ok", `Stopped: ${reason}`);
+        showPcapStopBanner(reason, res ? res.bytes : 0);
       } catch (e) {
-        pcapFlushPending();
+        while (pcapState.pendingPackets.length) flushVisible();
+        pcapRenderSummary();
         $("pcap-status").textContent = pcapStatusText(`error: ${e}`);
         logLine("err", `✗ Pcap: ${e}`);
         clearBusy(btn, false, "Pcap ✗");
+        setCardState("card-pcap", "err", "Failed");
+        showPcapErrorBanner(String(e));
       } finally {
         pcapState.running = false;
+        if (pcapState.statusTick) {
+          clearInterval(pcapState.statusTick);
+          pcapState.statusTick = 0;
+        }
         $("btn-pcap-stop").disabled = true;
         $("btn-pcap-clear").disabled = false;
+        pcapRenderSummary();
       }
     });
 
     $("btn-crash").addEventListener("click", (ev) =>
-      runBusy(ev.currentTarget, "Crash reports", async () => {
+      runBusyCard(ev.currentTarget, "card-crash", "Crash reports", async () => {
         const filter = $("crash-filter").value.trim();
         const keep = $("crash-keep").checked;
         const arr = await lockdownCrashReports(
@@ -1758,6 +3105,7 @@
         renderFiles(items);
         const total = items.reduce((a, f) => a + f.data.length, 0);
         logLine("ok", `Copied ${items.length} file(s) · ${fmtBytes(total)} · filter="${filter}" keep=${keep}`);
+        setCardState("card-crash", "ok", `${items.length} file(s) · ${fmtBytes(total)}`);
       })
     );
   </script>

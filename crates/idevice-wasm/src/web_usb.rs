@@ -19,16 +19,67 @@ pub struct AppleEndpoints {
 }
 
 /// `navigator.usb.requestDevice` with Apple **VID 0x05ac** (must run from a user gesture).
+///
+/// Fails with a human-friendly diagnostic when `navigator.usb` isn't accessible — the WebUSB
+/// API is only exposed in a [secure context](https://developer.mozilla.org/docs/Web/Security/Secure_Contexts)
+/// (HTTPS or `localhost`/`127.0.0.1`) on Chromium-based browsers, so users hitting this from
+/// `file://` or Firefox/Safari otherwise saw an opaque `Cannot read properties of undefined`
+/// crash deep in the wasm-bindgen runtime.
 #[wasm_bindgen(js_name = requestAppleDevice)]
 pub async fn request_apple_device() -> Result<UsbDevice, JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-    let usb: Usb = window.navigator().usb();
+    // `Navigator.usb` is a getter that returns `undefined` on unsupported / non-secure contexts.
+    // Crucially, web_sys still hands us back a `Usb` wrapper around `undefined` instead of
+    // panicking — calling `.request_device()` on it then throws inside the JS binding. Inspect
+    // the raw JsValue first so we can return a clear error.
+    let nav = window.navigator();
+    let usb_jsv: JsValue = js_sys::Reflect::get(nav.as_ref(), &JsValue::from_str("usb"))
+        .map_err(|_| JsValue::from_str("WebUSB unavailable: failed to read navigator.usb"))?;
+    if usb_jsv.is_undefined() || usb_jsv.is_null() {
+        return Err(JsValue::from_str(diagnose_no_webusb()));
+    }
+    let usb: Usb = nav.usb();
     let filter = UsbDeviceFilter::new();
     filter.set_vendor_id(0x05ac);
     let opts = UsbDeviceRequestOptions::new(&[filter]);
     let p = usb.request_device(&opts);
     let dev = JsFuture::from(p).await?;
-    dev.dyn_into::<UsbDevice>().map_err(|e| JsValue::from(e))
+    dev.dyn_into::<UsbDevice>().map_err(JsValue::from)
+}
+
+/// Build a one-line explanation of *why* `navigator.usb` is missing — secure-context, browser
+/// engine, or extension policy. Pure JS introspection so it works even without a WebUSB stack.
+fn diagnose_no_webusb() -> &'static str {
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => return "WebUSB unavailable: no `window` (running outside a browser?).",
+    };
+    // `window.isSecureContext` — false for plain `http://` or `file://` (except `localhost`).
+    let is_secure = js_sys::Reflect::get(window.as_ref(), &JsValue::from_str("isSecureContext"))
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if !is_secure {
+        return "WebUSB unavailable: this page must be served from a secure context — \
+                use https:// or http://localhost (e.g. `bash scripts/serve.sh`). \
+                file:// and plain http:// over LAN are blocked by the browser.";
+    }
+    let ua = js_sys::Reflect::get(window.navigator().as_ref(), &JsValue::from_str("userAgent"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+        .to_lowercase();
+    if ua.contains("firefox") {
+        return "WebUSB unavailable: Firefox does not implement the WebUSB API. \
+                Use Chrome / Edge / Brave / Arc / Opera over HTTPS or localhost.";
+    }
+    if ua.contains("safari") && !ua.contains("chrome") && !ua.contains("chromium") {
+        return "WebUSB unavailable: Safari does not implement the WebUSB API. \
+                Use Chrome / Edge / Brave / Arc / Opera over HTTPS or localhost.";
+    }
+    "WebUSB unavailable: `navigator.usb` is missing. Most likely an enterprise USB policy or \
+     a browser extension is blocking it; check `chrome://flags`, the Permissions Policy, and \
+     try a fresh user profile."
 }
 
 fn scan_config_for_apple_mux(cfg: &UsbConfiguration) -> Option<(u8, u8, AppleEndpoints)> {
