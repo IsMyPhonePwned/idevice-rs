@@ -1082,8 +1082,7 @@
         <div class="ac-body">
           <details class="toggle-block">
             <summary>Trigger on device</summary>
-            <p class="hint">Press <strong>Vol Up + Vol Down + Side</strong> together for ~0.7&nbsp;s (vibration). Wait ~5–10&nbsp;minutes for the <code>.tar.gz</code> archive under <code>DiagnosticLogs/sysdiagnose</code> on the device. <strong>Note:</strong> <code>stacks-*.ips</code> crash reports are not the sysdiagnose archive; Mac Finder may show synced copies that are no longer on the phone.</p>
-            <label class="inline"><input type="checkbox" id="sysdiagnose-keep" checked /> Keep on device after download</label>
+            <p class="hint">Press <strong>Vol Up + Vol Down + Side</strong> together for ~0.7&nbsp;s (vibration). Wait ~5–10&nbsp;minutes for the <code>.tar.gz</code> archive under <code>DiagnosticLogs/sysdiagnose</code> on the device. Downloads are read-only — files are never removed from the iPhone. <strong>Note:</strong> <code>stacks-*.ips</code> crash reports are not the sysdiagnose archive.</p>
           </details>
           <div class="btn-row">
             <button type="button" class="btn btn-primary" id="btn-sysdiagnose-list" data-needs="dev,auth">
@@ -1754,17 +1753,16 @@
       setBusy(btn, label);
       logLine("step", `▶ ${label}`);
       try {
-        const keep = $("sysdiagnose-keep").checked;
         const res = await lockdownSysdiagnoseDownload(
           dev, pairMode(), hostId(), systemBuid(),
           plistXmlText ?? "", verbose(),
           tlsClientAuth(), tlsSni(),
-          entry.path, keep
+          entry.path
         );
         const data = res.data;
         const name = res.name || entry.name;
         downloadFile({ name, data });
-        logLine("ok", `✓ Downloaded ${name} · ${fmtBytes(data.length)} · keep on device=${keep}`);
+        logLine("ok", `✓ Downloaded ${name} · ${fmtBytes(data.length)} (left on device)`);
         clearBusy(btn, true, "Downloaded");
       } catch (e) {
         logLine("err", `✗ ${label}: ${e}`);

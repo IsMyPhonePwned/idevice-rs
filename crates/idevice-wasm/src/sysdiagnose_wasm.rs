@@ -2,6 +2,7 @@
 //! (`DiagnosticLogs/sysdiagnose/…`), same paths as **libimobiledevice** `idevicecrashreport`.
 
 use async_recursion::async_recursion;
+use js_sys::Function;
 use wasm_bindgen::prelude::*;
 use web_sys::UsbDevice;
 
@@ -25,6 +26,18 @@ const SYSDIAGNOSE_MAX_BYTES: usize = 512 * 1024 * 1024;
 const LIST_MAX_DEPTH: u32 = 24;
 const LIST_MAX_MATCHES: usize = 64;
 const LIST_MAX_SCAN: usize = 2000;
+
+fn invoke_on_progress(on_progress: Option<&Function>, read: usize, total: usize) {
+    let Some(cb) = on_progress else { return };
+    if total == 0 {
+        return;
+    }
+    let _ = cb.call2(
+        &JsValue::NULL,
+        &JsValue::from_f64(read as f64),
+        &JsValue::from_f64(total as f64),
+    );
+}
 
 #[derive(Clone)]
 struct SysdiagnoseEntry {
@@ -419,6 +432,7 @@ async fn afc_read_file_capped(
     device_path: &str,
     scratch: &mut [u8],
     max_bytes: usize,
+    on_progress: Option<&Function>,
 ) -> Result<Vec<u8>, JsValue> {
     let info = afc
         .get_file_info_dict(device_path, scratch)
@@ -450,6 +464,7 @@ async fn afc_read_file_capped(
         .map_err(|e| JsValue::from_str(&e))?;
 
     let mut buf: Vec<u8> = Vec::with_capacity(cap.min(1024 * 1024));
+    invoke_on_progress(on_progress, 0, cap);
     while buf.len() < cap {
         let chunk = afc
             .file_read(h, 0x10000, scratch)
@@ -460,6 +475,7 @@ async fn afc_read_file_capped(
         }
         let room = cap - buf.len();
         buf.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        invoke_on_progress(on_progress, buf.len(), cap);
         if chunk.len() < 0x10000 {
             break;
         }
@@ -651,7 +667,7 @@ pub async fn sysdiagnose_download_flow(
     tls_client_auth: &str,
     tls_sni: &str,
     device_path: &str,
-    keep_on_device: bool,
+    on_progress: Option<Function>,
 ) -> Result<JsValue, JsValue> {
     let path = device_path.trim();
     if path.is_empty() {
@@ -687,12 +703,9 @@ pub async fn sysdiagnose_download_flow(
         path,
         &mut scratch,
         SYSDIAGNOSE_MAX_BYTES,
+        on_progress.as_ref(),
     )
     .await?;
-
-    if !keep_on_device {
-        let _ = afc.afc.remove_path(path, &mut scratch).await;
-    }
 
     let o = js_sys::Object::new();
     let file_name = path.rsplit('/').next().unwrap_or(path);

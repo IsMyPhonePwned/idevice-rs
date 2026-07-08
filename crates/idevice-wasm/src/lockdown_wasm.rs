@@ -7,6 +7,8 @@ use idevice_usb_core::lockdown_proto::{
     LOCKDOWN_DIAGNOSTIC_GET_VALUES, LOCKDOWND_PORT,
 };
 use idevice_usb_core::PairingIds;
+use js_sys::Function;
+use std::sync::Mutex;
 use wasm_bindgen::prelude::*;
 use web_sys::UsbDevice;
 
@@ -26,6 +28,49 @@ use crate::web_usb_session::{
 /// Default Trust-wait window for generated-key `Pair`: matches the CLI `--pair-trust-timeout-secs` default.
 const DEFAULT_PAIR_TIMEOUT_SECS: u32 = 120;
 const DEFAULT_PAIR_POLL_SECS: u32 = 4;
+
+/// RSA-2048 host/root chain built on **Pick device** so **Pair** can reach lockdownd (Trust prompt) sooner.
+static PREFETCHED_PAIR_KEYS: Mutex<Option<WasmHostKeys>> = Mutex::new(None);
+
+fn take_prefetched_pair_keys() -> Option<WasmHostKeys> {
+    PREFETCHED_PAIR_KEYS
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+}
+
+fn host_keys_for_pair() -> Result<WasmHostKeys, JsValue> {
+    if let Some(keys) = take_prefetched_pair_keys() {
+        wasm_log::info("pair: using prefetched RSA host keys");
+        return Ok(keys);
+    }
+    generate_host_keys().map_err(|e| JsValue::from_str(&e))
+}
+
+/// Start generating RSA host keys in the background (call right after `requestAppleDevice`).
+/// `lockdownPair` consumes the cache so the Trust prompt is not delayed by key generation.
+#[wasm_bindgen(js_name = prefetchPairHostKeys)]
+pub fn prefetch_pair_host_keys() {
+    if PREFETCHED_PAIR_KEYS
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|_| ()))
+        .is_some()
+    {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async {
+        match generate_host_keys() {
+            Ok(keys) => {
+                if let Ok(mut g) = PREFETCHED_PAIR_KEYS.lock() {
+                    *g = Some(keys);
+                    wasm_log::info("pair: RSA host keys prefetched — Pair will skip key generation");
+                }
+            }
+            Err(e) => wasm_log::warn(&format!("pair: key prefetch failed: {e}")),
+        }
+    });
+}
 
 fn trunc(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
@@ -84,7 +129,7 @@ async fn establish_lockdown_session(
             (keys, ids, false)
         }
         AuthSource::Generate { ids } => {
-            let keys = generate_host_keys().map_err(|e| JsValue::from_str(&e))?;
+            let keys = host_keys_for_pair()?;
             wasm_log::info("lockdown: Pair with freshly generated RSA keys (Trust prompt)…");
             let _qt = pipe.query_type().await?;
             let _ = pipe
@@ -229,7 +274,7 @@ pub async fn lockdown_pair(
         mode.trim()
     ));
     let ids = pairing_ids_from_mode(mode, "", "")?;
-    let keys = generate_host_keys().map_err(|e| JsValue::from_str(&e))?;
+    let keys = host_keys_for_pair()?;
     let eps = prepare_apple_usb(&device).await?;
     let mut pipe = WebUsbLockdownPipe::connect(&device, eps, verbose).await?;
     let _qt = pipe.query_type().await?;
@@ -462,7 +507,7 @@ pub async fn lockdown_sysdiagnose_download(
     tls_client_auth: &str,
     tls_sni: &str,
     device_path: &str,
-    keep_on_device: bool,
+    on_progress: Option<Function>,
 ) -> Result<JsValue, JsValue> {
     crate::sysdiagnose_wasm::sysdiagnose_download_flow(
         device,
@@ -474,7 +519,7 @@ pub async fn lockdown_sysdiagnose_download(
         tls_client_auth,
         tls_sni,
         device_path,
-        keep_on_device,
+        on_progress,
     )
     .await
 }
