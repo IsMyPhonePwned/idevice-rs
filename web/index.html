@@ -1067,6 +1067,32 @@
         </div>
       </div>
 
+      <!-- Sysdiagnose -->
+      <div class="action-card" id="card-sysdiagnose" data-state="idle">
+        <div class="ac-head">
+          <div class="ac-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v15a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+          </div>
+          <div class="ac-title">
+            <h3>Sysdiagnose</h3>
+            <div class="ac-sub"><code>crashreportcopymobile</code> AFC · probes <code>DiagnosticLogs/sysdiagnose</code> directly + full tree · per-archive download</div>
+          </div>
+          <span class="ac-pill" id="card-sysdiagnose-pill">Idle</span>
+        </div>
+        <div class="ac-body">
+          <details class="toggle-block">
+            <summary>Trigger on device</summary>
+            <p class="hint">Press <strong>Vol Up + Vol Down + Side</strong> together for ~0.7&nbsp;s (vibration). Wait ~5–10&nbsp;minutes for the <code>.tar.gz</code> archive under <code>DiagnosticLogs/sysdiagnose</code> on the device. <strong>Note:</strong> <code>stacks-*.ips</code> crash reports are not the sysdiagnose archive; Mac Finder may show synced copies that are no longer on the phone.</p>
+            <label class="inline"><input type="checkbox" id="sysdiagnose-keep" checked /> Keep on device after download</label>
+          </details>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-sysdiagnose-list" data-needs="dev,auth">
+              <span class="spinner" aria-hidden="true"></span><span>List sysdiagnose archives</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Crash reports -->
       <div class="action-card" id="card-crash" data-state="idle">
         <div class="ac-head">
@@ -1124,6 +1150,18 @@
           <tbody></tbody>
         </table>
       </div>
+      <div id="sysdiagnose-area" hidden>
+        <h2 style="font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin:0.7rem 0 0.3rem">Sysdiagnose — archives on device</h2>
+        <p class="hint" id="sysdiagnose-hint" style="margin:0 0 0.35rem"></p>
+        <table class="files-table" id="sysdiagnose-table">
+          <thead><tr><th>#</th><th>Name</th><th class="size">Size</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <details id="sysdiagnose-debug-wrap" hidden style="margin-top:0.5rem">
+          <summary style="cursor:pointer;color:var(--muted);font-size:0.84rem">AFC list debug (all paths scanned)</summary>
+          <pre id="sysdiagnose-debug" style="font-size:0.76rem;max-height:16rem;overflow:auto;margin:0.35rem 0 0;padding:0.5rem 0.6rem;background:var(--bg-2);border:1px solid var(--line-2);border-radius:6px;color:var(--muted)"></pre>
+        </details>
+      </div>
     </div>
   </main>
 
@@ -1137,6 +1175,8 @@
       lockdownBattery,
       lockdownDiagnostics,
       lockdownCrashReports,
+      lockdownSysdiagnoseList,
+      lockdownSysdiagnoseDownload,
       lockdownSyslog,
       lockdownScreenshot,
       lockdownPcap,
@@ -1173,6 +1213,8 @@
     let plistXmlText = null;
     /** {name, data: Uint8Array}[] from the last crash report run. */
     let lastFiles = [];
+    /** {path, name, sizeBytes}[] from the last sysdiagnose list. */
+    let lastSysdiagnoseEntries = [];
     /** Currently running button (only one at a time). */
     let busyBtn = null;
 
@@ -1183,6 +1225,8 @@
     const out = $("out");
     const filesArea = $("files-area");
     const filesTable = $("files-table").querySelector("tbody");
+    const sysdiagnoseArea = $("sysdiagnose-area");
+    const sysdiagnoseTable = $("sysdiagnose-table").querySelector("tbody");
 
     const verbose = () => $("verbose").checked;
     const pairMode = () => /** @type {HTMLInputElement} */ (document.querySelector('input[name="pair"]:checked')).value;
@@ -1645,15 +1689,87 @@
       });
     }
     function downloadFile(f) {
-      const blob = new Blob([f.data], { type: "application/octet-stream" });
+      const name = (f.name || "file").replace(/\//g, "_");
+      const type = /\.tar(\.gz)?$|-tar\.gz$|\.tgz$/i.test(name)
+        ? "application/gzip"
+        : "application/octet-stream";
+      const blob = new Blob([f.data], { type });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = (f.name || "file").replace(/\//g, "_");
+      a.download = name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     }
     function downloadAllFiles() {
       lastFiles.forEach((f, i) => setTimeout(() => downloadFile(f), i * 80));
+    }
+
+    /* -----------------------------
+     * Sysdiagnose — list + per-file download
+     * ----------------------------- */
+    function renderSysdiagnoseList(entries, debugText) {
+      lastSysdiagnoseEntries = entries || [];
+      sysdiagnoseTable.innerHTML = "";
+      const debugWrap = $("sysdiagnose-debug-wrap");
+      const debugPre = $("sysdiagnose-debug");
+      if (debugText) {
+        debugWrap.hidden = false;
+        debugPre.textContent = debugText;
+      } else {
+        debugWrap.hidden = true;
+        debugPre.textContent = "";
+      }
+      if (!lastSysdiagnoseEntries.length) {
+        sysdiagnoseArea.hidden = !debugText;
+        if (debugText) {
+          debugWrap.open = true;
+          $("sysdiagnose-hint").textContent =
+            "No finished archives matched — expand AFC list debug below to see what was on the device.";
+        }
+        return;
+      }
+      sysdiagnoseArea.hidden = false;
+      const total = lastSysdiagnoseEntries.reduce((a, e) => a + (e.sizeBytes || 0), 0);
+      $("sysdiagnose-hint").textContent =
+        `${lastSysdiagnoseEntries.length} archive(s) on device · ${fmtBytes(total)} total (sizes from AFC metadata). Click Download to pull one file at a time.`;
+      lastSysdiagnoseEntries.forEach((entry, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          `<td style="color:var(--muted)">${i + 1}</td>` +
+          `<td class="name">${escapeHtml(entry.name)}</td>` +
+          `<td class="size">${fmtBytes(entry.sizeBytes || 0)}</td>` +
+          `<td class="actions"></td>`;
+        const td = tr.querySelector("td.actions");
+        const btn = document.createElement("button");
+        btn.className = "btn btn-ghost";
+        btn.textContent = "Download";
+        btn.addEventListener("click", () => downloadSysdiagnoseArchive(btn, entry));
+        td.appendChild(btn);
+        sysdiagnoseTable.appendChild(tr);
+      });
+    }
+    async function downloadSysdiagnoseArchive(btn, entry) {
+      if (busyBtn) return;
+      const label = `Sysdiagnose · ${entry.name}`;
+      setBusy(btn, label);
+      logLine("step", `▶ ${label}`);
+      try {
+        const keep = $("sysdiagnose-keep").checked;
+        const res = await lockdownSysdiagnoseDownload(
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni(),
+          entry.path, keep
+        );
+        const data = res.data;
+        const name = res.name || entry.name;
+        downloadFile({ name, data });
+        logLine("ok", `✓ Downloaded ${name} · ${fmtBytes(data.length)} · keep on device=${keep}`);
+        clearBusy(btn, true, "Downloaded");
+      } catch (e) {
+        logLine("err", `✗ ${label}: ${e}`);
+        clearBusy(btn, false, "Failed");
+      }
     }
 
     /* -----------------------------
@@ -3106,6 +3222,35 @@
         const total = items.reduce((a, f) => a + f.data.length, 0);
         logLine("ok", `Copied ${items.length} file(s) · ${fmtBytes(total)} · filter="${filter}" keep=${keep}`);
         setCardState("card-crash", "ok", `${items.length} file(s) · ${fmtBytes(total)}`);
+      })
+    );
+
+    $("btn-sysdiagnose-list").addEventListener("click", (ev) =>
+      runBusyCard(ev.currentTarget, "card-sysdiagnose", "Sysdiagnose list", async () => {
+        const res = await lockdownSysdiagnoseList(
+          dev, pairMode(), hostId(), systemBuid(),
+          plistXmlText ?? "", verbose(),
+          tlsClientAuth(), tlsSni()
+        );
+        const items = Array.from(res.entries || [], (o) => ({
+          path: o.path,
+          name: o.name,
+          sizeBytes: o.sizeBytes | 0,
+        }));
+        const debugText = res.debug || "";
+        if (debugText) {
+          logLine("step", "Sysdiagnose AFC listing:");
+          logBlock(debugText);
+        }
+        renderSysdiagnoseList(items, debugText);
+        const total = items.reduce((a, e) => a + e.sizeBytes, 0);
+        if (items.length) {
+          logLine("ok", `Found ${items.length} sysdiagnose archive(s) · ${fmtBytes(total)} on device`);
+          setCardState("card-sysdiagnose", "ok", `${items.length} archive(s)`);
+        } else {
+          logLine("warn", "No finished sysdiagnose archives matched — see AFC list debug in the log / below the table.");
+          setCardState("card-sysdiagnose", "idle", "None matched");
+        }
       })
     );
   </script>

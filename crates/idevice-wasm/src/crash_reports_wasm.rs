@@ -212,6 +212,53 @@ pub async fn crash_reports_to_js_array<'a>(
     filter: Option<&str>,
     remove_all: bool,
 ) -> Result<JsValue, JsValue> {
+    let mut afc = open_crash_afc_session(pipe, keys, client_auth, tls_sni, verbose).await?;
+    let mut scratch = vec![0u8; 65536];
+    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut files_left = MAX_FILES;
+    let mut total_left = MAX_TOTAL_BYTES;
+
+    afc_collect_tree(
+        &mut afc.afc,
+        ".".to_string(),
+        String::new(),
+        &mut out,
+        &mut scratch,
+        keep,
+        filter,
+        remove_all,
+        0,
+        &mut files_left,
+        &mut total_left,
+    )
+    .await?;
+
+    let arr = js_sys::Array::new();
+    for (name, data) in out {
+        let o = js_sys::Object::new();
+        js_sys::Reflect::set(&o, &JsValue::from_str("name"), &JsValue::from_str(&name))
+            .map_err(|_| JsValue::from_str("Reflect::set name"))?;
+        let u8 = js_sys::Uint8Array::new_with_length(data.len() as u32);
+        u8.copy_from(&data);
+        js_sys::Reflect::set(&o, &JsValue::from_str("data"), &u8.into())
+            .map_err(|_| JsValue::from_str("Reflect::set data"))?;
+        arr.push(&o.into());
+    }
+    Ok(arr.into())
+}
+
+pub(crate) struct OpenCrashAfcSession<'a> {
+    pub afc: AfcSessionWasm<'a>,
+}
+
+/// Run crashreportmover ping, then open AFC on `com.apple.crashreportcopymobile`.
+pub(crate) async fn open_crash_afc_session<'a>(
+    pipe: &'a mut WebUsbLockdownPipe<'a>,
+    keys: &WasmHostKeys,
+    client_auth: LockdownTlsClientAuth,
+    tls_sni: LockdownTlsSni,
+    verbose: bool,
+) -> Result<OpenCrashAfcSession<'a>, JsValue> {
     let (port, ssl) = pipe.start_service(MOVER).await?;
     if !ssl {
         return Err(JsValue::from_str(
@@ -252,39 +299,8 @@ pub async fn crash_reports_to_js_array<'a>(
     .await
     .map_err(|e| JsValue::from_str(&e))?;
 
-    let mut afc = AfcSessionWasm::new(&mut pipe.hub, afc_tcp, afc_tls, verbose);
-    let mut scratch = vec![0u8; 65536];
-    let mut out: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut files_left = MAX_FILES;
-    let mut total_left = MAX_TOTAL_BYTES;
-
-    afc_collect_tree(
-        &mut afc,
-        ".".to_string(),
-        String::new(),
-        &mut out,
-        &mut scratch,
-        keep,
-        filter,
-        remove_all,
-        0,
-        &mut files_left,
-        &mut total_left,
-    )
-    .await?;
-
-    let arr = js_sys::Array::new();
-    for (name, data) in out {
-        let o = js_sys::Object::new();
-        js_sys::Reflect::set(&o, &JsValue::from_str("name"), &JsValue::from_str(&name))
-            .map_err(|_| JsValue::from_str("Reflect::set name"))?;
-        let u8 = js_sys::Uint8Array::new_with_length(data.len() as u32);
-        u8.copy_from(&data);
-        js_sys::Reflect::set(&o, &JsValue::from_str("data"), &u8.into())
-            .map_err(|_| JsValue::from_str("Reflect::set data"))?;
-        arr.push(&o.into());
-    }
-    Ok(arr.into())
+    let afc = AfcSessionWasm::new(&mut pipe.hub, afc_tcp, afc_tls, verbose);
+    Ok(OpenCrashAfcSession { afc })
 }
 
 #[allow(clippy::too_many_arguments)]

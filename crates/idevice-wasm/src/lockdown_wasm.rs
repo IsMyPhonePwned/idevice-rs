@@ -422,3 +422,67 @@ pub fn lockdown_crash_reports_info() -> String {
         LOCKDOWND_PORT
     )
 }
+
+/// List sysdiagnose `.tar.gz` archives on the device (metadata only; no download).
+#[wasm_bindgen(js_name = lockdownSysdiagnoseList)]
+#[allow(clippy::too_many_arguments)]
+pub async fn lockdown_sysdiagnose_list(
+    device: UsbDevice,
+    mode: &str,
+    host_id: &str,
+    system_buid: &str,
+    pair_record_plist_xml: &str,
+    verbose: bool,
+    tls_client_auth: &str,
+    tls_sni: &str,
+) -> Result<JsValue, JsValue> {
+    crate::sysdiagnose_wasm::sysdiagnose_list_flow(
+        device,
+        mode,
+        host_id,
+        system_buid,
+        pair_record_plist_xml,
+        verbose,
+        tls_client_auth,
+        tls_sni,
+    )
+    .await
+}
+
+/// Download one sysdiagnose `.tar.gz` by device AFC path (up to ~512 MiB).
+#[wasm_bindgen(js_name = lockdownSysdiagnoseDownload)]
+#[allow(clippy::too_many_arguments)]
+pub async fn lockdown_sysdiagnose_download(
+    device: UsbDevice,
+    mode: &str,
+    host_id: &str,
+    system_buid: &str,
+    pair_record_plist_xml: &str,
+    verbose: bool,
+    tls_client_auth: &str,
+    tls_sni: &str,
+    device_path: &str,
+    keep_on_device: bool,
+) -> Result<JsValue, JsValue> {
+    crate::sysdiagnose_wasm::sysdiagnose_download_flow(
+        device,
+        mode,
+        host_id,
+        system_buid,
+        pair_record_plist_xml,
+        verbose,
+        tls_client_auth,
+        tls_sni,
+        device_path,
+        keep_on_device,
+    )
+    .await
+}
+
+#[wasm_bindgen(js_name = lockdownSysdiagnoseInfo)]
+pub fn lockdown_sysdiagnose_info() -> String {
+    "List/download sysdiagnose archives from DiagnosticLogs/sysdiagnose via crashreport AFC. \
+     Trigger sysdiagnose on the iPhone first (Vol Up + Vol Down + Side button ~0.7s), wait ~5 minutes, \
+     then list (returns AFC walk debug + matches). Accepts .tar.gz, -tar.gz, .tgz, .tar. \
+     Archives can be large (100–500 MB); browser memory limits apply.".into()
+}

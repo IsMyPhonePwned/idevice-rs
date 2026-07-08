@@ -8,6 +8,7 @@ use wasm_bindgen::prelude::*;
 
 mod afc_wasm;
 mod crash_reports_wasm;
+mod sysdiagnose_wasm;
 mod lockdown_tls_wasm;
 mod lockdown_wasm;
 mod mux_probe;
